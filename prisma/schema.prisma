@@ -1,0 +1,742 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model appointments {
+  appointment_id                        Int          @id @default(autoincrement())
+  hospital_id                           Int
+  patient_id                            Int
+  doctor_id                             Int
+  appointment_no                        String       @unique(map: "uq_appointment_no") @db.VarChar(50)
+  appointment_date                      DateTime     @db.Date
+  appointment_time                      DateTime     @db.Time(6)
+  appointment_status                    String       @db.VarChar(30)
+  remarks                               String?      @db.VarChar(250)
+  is_active                             Boolean?     @default(true)
+  created_by                            Int
+  modified_by                           Int
+  created_at                            DateTime     @default(now()) @db.Timestamptz(6)
+  modified_at                           DateTime     @default(now()) @db.Timestamptz(6)
+  users_appointments_created_byTousers  users        @relation("appointments_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  doctors                               doctors      @relation(fields: [doctor_id], references: [doctor_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                             hospitals    @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  users_appointments_modified_byTousers users        @relation("appointments_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  patients                              patients     @relation(fields: [patient_id], references: [patient_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits                            opd_visits[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model bill_items {
+  bill_item_id     Int      @id @default(autoincrement())
+  bill_id          Int
+  item_type        String   @db.VarChar(50)
+  reference_id     Int?
+  item_description String   @db.VarChar(250)
+  quantity         Int      @default(1)
+  unit_price       Decimal  @db.Decimal(10, 2)
+  total_price      Decimal  @db.Decimal(10, 2)
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  billing          billing  @relation(fields: [bill_id], references: [bill_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model billing {
+  bill_id                          Int          @id @default(autoincrement())
+  hospital_id                      Int
+  visit_id                         Int
+  bill_number                      String       @unique @db.VarChar(50)
+  bill_date                        DateTime     @default(dbgenerated("CURRENT_DATE")) @db.Date
+  subtotal_amount                  Decimal      @db.Decimal(10, 2)
+  tax_amount                       Decimal      @default(0) @db.Decimal(10, 2)
+  discount_amount                  Decimal      @default(0) @db.Decimal(10, 2)
+  total_amount                     Decimal?     @default(dbgenerated("((subtotal_amount + tax_amount) - discount_amount)")) @db.Decimal(10, 2)
+  payment_status                   String       @db.VarChar(50)
+  billing_status                   String       @db.VarChar(50)
+  is_active                        Boolean?     @default(true)
+  created_by                       Int
+  modified_by                      Int
+  created_at                       DateTime     @default(now()) @db.Timestamptz(6)
+  modified_at                      DateTime     @default(now()) @db.Timestamptz(6)
+  bill_items                       bill_items[]
+  users_billing_created_byTousers  users        @relation("billing_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                        hospitals    @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  users_billing_modified_byTousers users        @relation("billing_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits                       opd_visits   @relation(fields: [visit_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+  payments                         payments[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model blood_groups {
+  blood_group_id   Int        @id @default(autoincrement())
+  blood_group_name String     @unique(map: "uq_blood_group") @db.VarChar(10)
+  is_active        Boolean    @default(true)
+  created_at       DateTime   @default(now()) @db.Timestamptz(6)
+  modified_at      DateTime   @default(now()) @db.Timestamptz(6)
+  patients         patients[]
+}
+
+model cities {
+  city_id     Int         @id @default(autoincrement())
+  state_id    Int
+  city_name   String      @db.VarChar(150)
+  city_code   String      @db.VarChar(20)
+  is_active   Boolean     @default(true)
+  created_at  DateTime    @default(now()) @db.Timestamptz(6)
+  modified_at DateTime    @default(now()) @db.Timestamptz(6)
+  states      states      @relation(fields: [state_id], references: [state_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals   hospitals[]
+  patients    patients[]
+
+  @@unique([state_id, city_name], map: "uq_city_state")
+}
+
+model group_counters {
+  counter_id        Int             @id @default(autoincrement())
+  hospital_group_id Int
+  counter_type      String          @db.VarChar(50)
+  prefix            String?         @db.VarChar(20)
+  current_value     Int             @default(0)
+  is_active         Boolean?        @default(true)
+  created_at        DateTime?       @default(now()) @db.Timestamptz(6)
+  modified_at       DateTime?       @default(now()) @db.Timestamptz(6)
+  hospital_groups   hospital_groups @relation(fields: [hospital_group_id], references: [hospital_group_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([hospital_group_id, counter_type], map: "uq_group_counter")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model daily_queues {
+  daily_queue_id                        Int            @id @default(autoincrement())
+  hospital_id                           Int
+  doctor_id                             Int
+  queue_date                            DateTime       @db.Date
+  current_token                         Int            @default(0)
+  status                                String         @db.VarChar(20)
+  opened_at                             DateTime       @default(now()) @db.Timestamptz(6)
+  closed_at                             DateTime?      @db.Timestamptz(6)
+  created_by                            Int
+  modified_by                           Int
+  created_at                            DateTime       @default(now()) @db.Timestamptz(6)
+  modified_at                           DateTime       @default(now()) @db.Timestamptz(6)
+  users_daily_queues_created_byTousers  users          @relation("daily_queues_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  doctors                               doctors        @relation(fields: [doctor_id], references: [doctor_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                             hospitals      @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  users_daily_queues_modified_byTousers users          @relation("daily_queues_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  queue_tokens                          queue_tokens[]
+
+  @@unique([hospital_id, doctor_id, queue_date], map: "uq_daily_queue")
+}
+
+model departments_master {
+  department_id        Int                    @id @default(autoincrement())
+  department_code      String                 @unique(map: "uq_department_code") @db.VarChar(50)
+  department_name      String                 @db.VarChar(150)
+  description          String?                @db.VarChar(250)
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  diagnoses            diagnoses[]
+  doctors              doctors[]
+  hospital_departments hospital_departments[]
+  tests                tests[]
+  treatment_types      treatment_types[]
+}
+
+model diagnoses {
+  diagnosis_id       Int                  @id @default(autoincrement())
+  diagnosis_code     String               @unique @db.VarChar(50)
+  diagnosis_name     String               @db.VarChar(200)
+  description        String?              @db.VarChar(500)
+  department_id      Int
+  departments_master departments_master   @relation(fields: [department_id], references: [department_id], onDelete: NoAction, onUpdate: NoAction)
+  hospital_diagnoses hospital_diagnoses[]
+  opd_diagnoses      opd_diagnoses[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model doctor_availability {
+  availability_id  Int      @id @default(autoincrement())
+  doctor_id        Int
+  day_of_week      Int
+  start_time       DateTime @db.Time(6)
+  end_time         DateTime @db.Time(6)
+  max_appointments Int
+  is_available     Boolean? @default(true)
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  modified_at      DateTime @default(now()) @db.Timestamptz(6)
+  doctors          doctors  @relation(fields: [doctor_id], references: [doctor_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([doctor_id, day_of_week], map: "uq_doctor_day")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model doctors {
+  doctor_id                        Int                   @id @default(autoincrement())
+  user_id                          Int                   @unique(map: "uq_doctor_user")
+  hospital_id                      Int
+  department_id                    Int
+  specialization_id                Int
+  gender                           String                @db.VarChar(10)
+  qualification                    String                @db.VarChar(150)
+  medical_license_no               String                @unique(map: "uq_doctor_license") @db.VarChar(100)
+  experience_years                 Int                   @default(0)
+  consultation_fees                Decimal               @default(0.00) @db.Decimal(10, 2)
+  is_available                     Boolean               @default(true)
+  description                      String?               @db.VarChar(500)
+  created_by                       Int
+  modified_by                      Int
+  created_at                       DateTime              @default(now()) @db.Timestamptz(6)
+  modified_at                      DateTime              @default(now()) @db.Timestamptz(6)
+  appointments                     appointments[]
+  daily_queues                     daily_queues[]
+  doctor_availability              doctor_availability[]
+  users_doctors_created_byTousers  users                 @relation("doctors_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  departments_master               departments_master    @relation(fields: [department_id], references: [department_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                        hospitals             @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  users_doctors_modified_byTousers users                 @relation("doctors_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  specializations                  specializations       @relation(fields: [specialization_id], references: [specialization_id], onDelete: NoAction, onUpdate: NoAction)
+  users_doctors_user_idTousers     users                 @relation("doctors_user_idTousers", fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits                       opd_visits[]
+  prescriptions                    prescriptions[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model employees {
+  employee_id                        Int              @id @default(autoincrement())
+  user_id                            Int              @unique
+  hospital_group_id                  Int?
+  hospital_id                        Int?
+  employee_type                      String           @db.VarChar(30)
+  joining_date                       DateTime         @db.Date
+  is_active                          Boolean          @default(true)
+  created_by                         Int?
+  modified_by                        Int?
+  created_at                         DateTime         @default(now()) @db.Timestamptz(6)
+  modified_at                        DateTime         @default(now()) @db.Timestamptz(6)
+  users_employees_created_byTousers  users?           @relation("employees_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  hospital_groups                    hospital_groups? @relation(fields: [hospital_group_id], references: [hospital_group_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                          hospitals?       @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  users_employees_modified_byTousers users?           @relation("employees_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  users_employees_user_idTousers     users            @relation("employees_user_idTousers", fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model followups {
+  followup_id      Int        @id @default(autoincrement())
+  visit_id         Int
+  recommended_date DateTime   @db.Date
+  reason           String     @db.VarChar(250)
+  status           String     @db.VarChar(50)
+  created_at       DateTime   @default(now()) @db.Timestamptz(6)
+  modified_at      DateTime   @default(now()) @db.Timestamptz(6)
+  opd_visits       opd_visits @relation(fields: [visit_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model hospital_counters {
+  counter_id                                 Int       @id @default(autoincrement())
+  hospital_id                                Int
+  counter_type                               String    @db.VarChar(50)
+  prefix                                     String?   @db.VarChar(20)
+  current_value                              Int       @default(0)
+  reset_policy                               String    @db.VarChar(50)
+  last_reset_date                            DateTime? @db.Date
+  is_active                                  Boolean   @default(true)
+  created_by                                 Int
+  modified_by                                Int
+  created_at                                 DateTime  @default(now()) @db.Timestamptz(6)
+  modified_at                                DateTime  @default(now()) @db.Timestamptz(6)
+  users_hospital_counters_created_byTousers  users     @relation("hospital_counters_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                                  hospitals @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  users_hospital_counters_modified_byTousers users     @relation("hospital_counters_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([hospital_id, counter_type], map: "uq_counter")
+}
+
+model hospital_departments {
+  hospital_department_id Int                @id @default(autoincrement())
+  hospital_id            Int
+  department_id          Int
+  is_active              Boolean            @default(true)
+  created_at             DateTime           @default(now()) @db.Timestamptz(6)
+  modified_at            DateTime           @default(now()) @db.Timestamptz(6)
+  departments_master     departments_master @relation(fields: [department_id], references: [department_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals              hospitals          @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([hospital_id, department_id], map: "uq_hospital_department")
+}
+
+model hospital_diagnoses {
+  hospital_diagnosis_id Int       @id @default(autoincrement())
+  hospital_id           Int
+  diagnosis_id          Int
+  is_active             Boolean   @default(true)
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  modified_at           DateTime  @default(now()) @db.Timestamptz(6)
+  diagnoses             diagnoses @relation(fields: [diagnosis_id], references: [diagnosis_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals             hospitals @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([hospital_id, diagnosis_id], map: "uq_hospital_diagnosis")
+}
+
+model hospital_groups {
+  hospital_group_id                        Int              @id @default(autoincrement())
+  group_name                               String           @unique(map: "uq_group_name") @db.VarChar(250)
+  group_code                               String           @unique(map: "uq_group_code") @db.VarChar(50)
+  description                              String?          @db.VarChar(500)
+  registration_no                          String?          @unique(map: "uq_group_reg") @db.VarChar(100)
+  contact_phone                            String?          @db.VarChar(15)
+  contact_email                            String?          @db.VarChar(150)
+  is_active                                Boolean          @default(true)
+  created_by                               Int
+  modified_by                              Int
+  created_at                               DateTime         @default(now()) @db.Timestamptz(6)
+  modified_at                              DateTime         @default(now()) @db.Timestamptz(6)
+  employees                                employees[]
+  group_counters                           group_counters[]
+  users_hospital_groups_created_byTousers  users            @relation("hospital_groups_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  users_hospital_groups_modified_byTousers users            @relation("hospital_groups_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                                hospitals[]
+  patients                                 patients[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model hospital_medicines {
+  hospital_medicine_id Int       @id @default(autoincrement())
+  hospital_id          Int
+  medicine_id          Int
+  price                Decimal   @db.Decimal(10, 2)
+  stock_quantity       Int       @default(0)
+  is_active            Boolean   @default(true)
+  created_at           DateTime  @default(now()) @db.Timestamptz(6)
+  modified_at          DateTime  @default(now()) @db.Timestamptz(6)
+  hospitals            hospitals @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  medicines            medicines @relation(fields: [medicine_id], references: [medicine_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([hospital_id, medicine_id], map: "uq_hospital_medicine")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model hospital_procedures {
+  hospital_procedure_id Int                 @id @default(autoincrement())
+  hospital_id           Int
+  hospital_treatment_id Int
+  procedure_id          Int
+  price                 Decimal             @db.Decimal(10, 2)
+  is_active             Boolean             @default(true)
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  modified_at           DateTime            @default(now()) @db.Timestamptz(6)
+  hospitals             hospitals           @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  procedures            procedures          @relation(fields: [procedure_id], references: [procedure_id], onDelete: NoAction, onUpdate: NoAction)
+  hospital_treatments   hospital_treatments @relation(fields: [hospital_treatment_id], references: [hospital_treatment_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([hospital_id, procedure_id], map: "uq_hospital_procedure")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model hospital_tests {
+  hospital_test_id Int       @id @default(autoincrement())
+  hospital_id      Int
+  test_id          Int
+  price            Decimal   @db.Decimal(10, 2)
+  is_active        Boolean   @default(true)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+  modified_at      DateTime  @default(now()) @db.Timestamptz(6)
+  hospitals        hospitals @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  tests            tests     @relation(fields: [test_id], references: [test_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([hospital_id, test_id], map: "uq_hospital_test")
+}
+
+model hospital_treatments {
+  hospital_treatment_id Int                   @id @default(autoincrement())
+  hospital_id           Int
+  treatment_type_id     Int
+  is_active             Boolean               @default(true)
+  created_at            DateTime              @default(now()) @db.Timestamptz(6)
+  modified_at           DateTime              @default(now()) @db.Timestamptz(6)
+  hospitals             hospitals             @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  treatment_types       treatment_types       @relation(fields: [treatment_type_id], references: [treatment_type_id], onDelete: NoAction, onUpdate: NoAction)
+  hospital_procedures   hospital_procedures[]
+
+  @@unique([hospital_id, treatment_type_id], map: "uq_hospital_treatment")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model hospitals {
+  hospital_id                        Int                    @id @default(autoincrement())
+  hospital_group_id                  Int
+  hospital_name                      String                 @db.VarChar(250)
+  hospital_code                      String                 @unique(map: "uq_hospital_code") @db.VarChar(50)
+  registration_validity_months       Int                    @default(0)
+  receptionist_contact               String                 @unique(map: "uq_receptionist_contact") @db.VarChar(20)
+  opening_date                       DateTime               @db.Date
+  address                            String                 @db.VarChar(500)
+  city_id                            Int?
+  state_id                           Int?
+  pincode                            String                 @db.VarChar(10)
+  description                        String?                @db.VarChar(250)
+  registration_no                    String?                @unique(map: "uq_hospital_reg") @db.VarChar(100)
+  license_no                         String?                @unique(map: "uq_hospital_license") @db.VarChar(100)
+  gst_no                             String?                @unique(map: "uq_hospital_gst") @db.VarChar(20)
+  contact_phone                      String?                @db.VarChar(20)
+  contact_email                      String?                @db.VarChar(150)
+  opening_time                       DateTime?              @db.Time(6)
+  closing_time                       DateTime?              @db.Time(6)
+  is_24by7                           Boolean                @default(false)
+  is_active                          Boolean                @default(true)
+  created_by                         Int
+  modified_by                        Int
+  created_at                         DateTime               @default(now()) @db.Timestamptz(6)
+  modified_at                        DateTime               @default(now()) @db.Timestamptz(6)
+  appointments                       appointments[]
+  billing                            billing[]
+  daily_queues                       daily_queues[]
+  doctors                            doctors[]
+  employees                          employees[]
+  hospital_counters                  hospital_counters[]
+  hospital_departments               hospital_departments[]
+  hospital_diagnoses                 hospital_diagnoses[]
+  hospital_medicines                 hospital_medicines[]
+  hospital_procedures                hospital_procedures[]
+  hospital_tests                     hospital_tests[]
+  hospital_treatments                hospital_treatments[]
+  cities                             cities?                @relation(fields: [city_id], references: [city_id], onDelete: NoAction, onUpdate: NoAction)
+  users_hospitals_created_byTousers  users                  @relation("hospitals_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  hospital_groups                    hospital_groups        @relation(fields: [hospital_group_id], references: [hospital_group_id], onDelete: NoAction, onUpdate: NoAction)
+  users_hospitals_modified_byTousers users                  @relation("hospitals_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  states                             states?                @relation(fields: [state_id], references: [state_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits                         opd_visits[]
+}
+
+model medicines {
+  medicine_id        Int                  @id @default(autoincrement())
+  medicine_code      String               @unique @db.VarChar(50)
+  medicine_name      String               @db.VarChar(200)
+  medicine_type      String               @db.VarChar(100)
+  strength           String               @db.VarChar(100)
+  manufacturer       String?              @db.VarChar(200)
+  is_active          Boolean              @default(true)
+  price              Decimal              @default(0.00) @db.Decimal(10, 2)
+  hospital_medicines hospital_medicines[]
+  prescription_items prescription_items[]
+}
+
+model opd_diagnoses {
+  opd_diagnosis_id Int        @id @default(autoincrement())
+  visit_id         Int
+  diagnosis_id     Int
+  is_primary       Boolean    @default(false)
+  remarks          String?    @db.VarChar(250)
+  created_at       DateTime   @default(now()) @db.Timestamptz(6)
+  modified_at      DateTime   @default(now()) @db.Timestamptz(6)
+  diagnoses        diagnoses  @relation(fields: [diagnosis_id], references: [diagnosis_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits       opd_visits @relation(fields: [visit_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([visit_id, diagnosis_id], map: "uq_opd_diagnosis")
+}
+
+model opd_procedures {
+  opd_procedure_id Int        @id @default(autoincrement())
+  visit_id         Int
+  procedure_id     Int
+  procedure_date   DateTime   @db.Date
+  remarks          String?    @db.VarChar(250)
+  created_at       DateTime   @default(now()) @db.Timestamptz(6)
+  modified_at      DateTime   @default(now()) @db.Timestamptz(6)
+  procedures       procedures @relation(fields: [procedure_id], references: [procedure_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits       opd_visits @relation(fields: [visit_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model opd_tests {
+  opd_test_id    Int        @id @default(autoincrement())
+  visit_id       Int
+  test_id        Int
+  test_status    String     @db.VarChar(50)
+  result_summary String?
+  ordered_at     DateTime   @default(now()) @db.Timestamptz(6)
+  completed_at   DateTime?  @db.Timestamptz(6)
+  tests          tests      @relation(fields: [test_id], references: [test_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits     opd_visits @relation(fields: [visit_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model opd_visits {
+  opd_id                              Int              @id @default(autoincrement())
+  hospital_id                         Int
+  patient_id                          Int
+  doctor_id                           Int
+  appointment_id                      Int?
+  opd_no                              String           @unique(map: "uq_opd_no") @db.VarChar(50)
+  visit_datetime                      DateTime         @db.Timestamptz(6)
+  is_follow_up                        Boolean          @default(false)
+  old_opd_id                          Int?
+  chief_complaint                     String           @db.VarChar(500)
+  clinical_notes                      String?
+  is_active                           Boolean?         @default(true)
+  created_by                          Int
+  modified_by                         Int
+  created_at                          DateTime         @default(now()) @db.Timestamptz(6)
+  modified_at                         DateTime         @default(now()) @db.Timestamptz(6)
+  billing                             billing[]
+  followups                           followups[]
+  opd_diagnoses                       opd_diagnoses[]
+  opd_procedures                      opd_procedures[]
+  opd_tests                           opd_tests[]
+  appointments                        appointments?    @relation(fields: [appointment_id], references: [appointment_id], onDelete: NoAction, onUpdate: NoAction)
+  users_opd_visits_created_byTousers  users            @relation("opd_visits_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  doctors                             doctors          @relation(fields: [doctor_id], references: [doctor_id], onDelete: NoAction, onUpdate: NoAction)
+  hospitals                           hospitals        @relation(fields: [hospital_id], references: [hospital_id], onDelete: NoAction, onUpdate: NoAction)
+  users_opd_visits_modified_byTousers users            @relation("opd_visits_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits                          opd_visits?      @relation("opd_visitsToopd_visits", fields: [old_opd_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+  other_opd_visits                    opd_visits[]     @relation("opd_visitsToopd_visits")
+  patients                            patients         @relation(fields: [patient_id], references: [patient_id], onDelete: NoAction, onUpdate: NoAction)
+  prescriptions                       prescriptions[]
+  queue_tokens                        queue_tokens[]
+  vitals                              vitals?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model patients {
+  patient_id                        Int              @id @default(autoincrement())
+  user_id                           Int?
+  hospital_group_id                 Int?
+  patient_no                        String?          @unique(map: "uq_patient_no") @db.VarChar(50)
+  gender                            String           @db.VarChar(10)
+  dob                               DateTime         @db.Date
+  is_minor                          Boolean          @default(false)
+  blood_group_id                    Int?
+  phone_number                      String?          @db.VarChar(20)
+  email                             String?          @db.VarChar(150)
+  address                           String           @db.VarChar(500)
+  city_id                           Int?
+  state_id                          Int?
+  pincode                           String           @db.VarChar(10)
+  emergency_contact_name            String           @db.VarChar(150)
+  emergency_contact_number          String           @db.VarChar(20)
+  is_walk_in                        Boolean          @default(false)
+  is_active                         Boolean          @default(true)
+  created_by                        Int
+  modified_by                       Int
+  created_at                        DateTime         @default(now()) @db.Timestamptz(6)
+  modified_at                       DateTime         @default(now()) @db.Timestamptz(6)
+  appointments                      appointments[]
+  opd_visits                        opd_visits[]
+  blood_groups                      blood_groups?    @relation(fields: [blood_group_id], references: [blood_group_id], onDelete: NoAction, onUpdate: NoAction)
+  cities                            cities?          @relation(fields: [city_id], references: [city_id], onDelete: NoAction, onUpdate: NoAction)
+  users_patients_created_byTousers  users            @relation("patients_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  hospital_groups                   hospital_groups? @relation(fields: [hospital_group_id], references: [hospital_group_id], onDelete: NoAction, onUpdate: NoAction)
+  users_patients_modified_byTousers users            @relation("patients_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  states                            states?          @relation(fields: [state_id], references: [state_id], onDelete: NoAction, onUpdate: NoAction)
+  users_patients_user_idTousers     users?           @relation("patients_user_idTousers", fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model payment_modes {
+  payment_mode_id    Int        @id @default(autoincrement())
+  payment_mode_name  String     @unique(map: "uq_payment_mode") @db.VarChar(100)
+  requires_reference Boolean    @default(false)
+  is_active          Boolean    @default(true)
+  payments           payments[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model payments {
+  payment_id                        Int           @id @default(autoincrement())
+  bill_id                           Int
+  payment_mode_id                   Int
+  payment_date                      DateTime      @default(now()) @db.Timestamptz(6)
+  amount_paid                       Decimal       @db.Decimal(10, 2)
+  reference_number                  String?       @db.VarChar(100)
+  payment_status                    String        @db.VarChar(50)
+  received_by                       Int
+  is_active                         Boolean?      @default(true)
+  created_by                        Int
+  modified_by                       Int
+  created_at                        DateTime      @default(now()) @db.Timestamptz(6)
+  modified_at                       DateTime      @default(now()) @db.Timestamptz(6)
+  billing                           billing       @relation(fields: [bill_id], references: [bill_id], onDelete: NoAction, onUpdate: NoAction)
+  users_payments_created_byTousers  users         @relation("payments_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  users_payments_modified_byTousers users         @relation("payments_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  payment_modes                     payment_modes @relation(fields: [payment_mode_id], references: [payment_mode_id], onDelete: NoAction, onUpdate: NoAction)
+  users_payments_received_byTousers users         @relation("payments_received_byTousers", fields: [received_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model prescription_items {
+  prescription_item_id Int           @id @default(autoincrement())
+  prescription_id      Int
+  medicine_id          Int
+  dosage               String        @db.VarChar(100)
+  quantity             Int
+  duration_days        Int
+  instructions         String?       @db.VarChar(250)
+  medicines            medicines     @relation(fields: [medicine_id], references: [medicine_id], onDelete: NoAction, onUpdate: NoAction)
+  prescriptions        prescriptions @relation(fields: [prescription_id], references: [prescription_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model prescriptions {
+  prescription_id                        Int                  @id @default(autoincrement())
+  visit_id                               Int
+  doctor_id                              Int
+  prescribed_date                        DateTime             @default(dbgenerated("CURRENT_DATE")) @db.Date
+  notes                                  String?              @db.VarChar(500)
+  status                                 String               @default("Pending") @db.VarChar(50)
+  is_active                              Boolean?             @default(true)
+  created_by                             Int?
+  modified_by                            Int?
+  created_at                             DateTime?            @default(now()) @db.Timestamptz(6)
+  modified_at                            DateTime?            @default(now()) @db.Timestamptz(6)
+  prescription_items                     prescription_items[]
+  users_prescriptions_created_byTousers  users?               @relation("prescriptions_created_byTousers", fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  doctors                                doctors              @relation(fields: [doctor_id], references: [doctor_id], onDelete: NoAction, onUpdate: NoAction)
+  users_prescriptions_modified_byTousers users?               @relation("prescriptions_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits                             opd_visits           @relation(fields: [visit_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model procedures {
+  procedure_id        Int                   @id @default(autoincrement())
+  procedure_code      String                @unique @db.VarChar(50)
+  procedure_name      String                @db.VarChar(200)
+  treatment_type_id   Int
+  description         String?               @db.VarChar(500)
+  is_surgical         Boolean               @default(false)
+  is_active           Boolean               @default(true)
+  price               Decimal               @default(0.00) @db.Decimal(10, 2)
+  hospital_procedures hospital_procedures[]
+  opd_procedures      opd_procedures[]
+  treatment_types     treatment_types       @relation(fields: [treatment_type_id], references: [treatment_type_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model queue_tokens {
+  token_id       Int          @id @default(autoincrement())
+  daily_queue_id Int
+  opd_id         Int?
+  token_number   Int
+  status         String       @db.VarChar(30)
+  issued_at      DateTime     @default(now()) @db.Timestamptz(6)
+  started_at     DateTime?    @db.Timestamptz(6)
+  completed_at   DateTime?    @db.Timestamptz(6)
+  daily_queues   daily_queues @relation(fields: [daily_queue_id], references: [daily_queue_id], onDelete: NoAction, onUpdate: NoAction)
+  opd_visits     opd_visits?  @relation(fields: [opd_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([daily_queue_id, token_number], map: "uq_queue_token")
+}
+
+model roles {
+  role_id     Int     @id @default(autoincrement())
+  role_name   String  @unique(map: "uq_role") @db.VarChar(100)
+  description String? @db.VarChar(250)
+  is_active   Boolean @default(true)
+  users       users[]
+}
+
+model specializations {
+  specialization_id   Int       @id @default(autoincrement())
+  specialization_name String    @unique(map: "uq_specialization") @db.VarChar(150)
+  description         String?   @db.VarChar(250)
+  is_active           Boolean   @default(true)
+  doctors             doctors[]
+}
+
+model states {
+  state_id    Int         @id @default(autoincrement())
+  state_name  String      @unique(map: "uq_states_name") @db.VarChar(100)
+  state_code  String      @unique(map: "uq_states_code") @db.VarChar(10)
+  is_active   Boolean     @default(true)
+  created_at  DateTime    @default(now()) @db.Timestamptz(6)
+  modified_at DateTime    @default(now()) @db.Timestamptz(6)
+  cities      cities[]
+  hospitals   hospitals[]
+  patients    patients[]
+}
+
+model tests {
+  test_id            Int                @id @default(autoincrement())
+  test_code          String             @unique @db.VarChar(50)
+  test_name          String             @db.VarChar(200)
+  test_type          String             @db.VarChar(100)
+  department_id      Int
+  description        String?            @db.VarChar(500)
+  is_active          Boolean            @default(true)
+  price              Decimal            @default(0.00) @db.Decimal(10, 2)
+  hospital_tests     hospital_tests[]
+  opd_tests          opd_tests[]
+  departments_master departments_master @relation(fields: [department_id], references: [department_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model treatment_types {
+  treatment_type_id   Int                   @id @default(autoincrement())
+  department_id       Int
+  treatment_code      String                @unique @db.VarChar(50)
+  treatment_name      String                @db.VarChar(200)
+  description         String?               @db.VarChar(500)
+  is_active           Boolean               @default(true)
+  hospital_treatments hospital_treatments[]
+  procedures          procedures[]
+  departments_master  departments_master    @relation(fields: [department_id], references: [department_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model users {
+  user_id                                                Int                 @id @default(autoincrement())
+  full_name                                              String              @db.VarChar(150)
+  email                                                  String              @unique(map: "uq_user_email") @db.VarChar(100)
+  phone_number                                           String              @unique(map: "uq_user_phone") @db.VarChar(20)
+  password_hash                                          String              @db.VarChar(255)
+  role_id                                                Int
+  profile_image_url                                      String?             @db.VarChar(255)
+  is_active                                              Boolean             @default(true)
+  last_login_at                                          DateTime?           @db.Timestamptz(6)
+  password_changed_at                                    DateTime?           @db.Timestamptz(6)
+  created_at                                             DateTime            @default(now()) @db.Timestamptz(6)
+  modified_at                                            DateTime            @default(now()) @db.Timestamptz(6)
+  appointments_appointments_created_byTousers            appointments[]      @relation("appointments_created_byTousers")
+  appointments_appointments_modified_byTousers           appointments[]      @relation("appointments_modified_byTousers")
+  billing_billing_created_byTousers                      billing[]           @relation("billing_created_byTousers")
+  billing_billing_modified_byTousers                     billing[]           @relation("billing_modified_byTousers")
+  daily_queues_daily_queues_created_byTousers            daily_queues[]      @relation("daily_queues_created_byTousers")
+  daily_queues_daily_queues_modified_byTousers           daily_queues[]      @relation("daily_queues_modified_byTousers")
+  doctors_doctors_created_byTousers                      doctors[]           @relation("doctors_created_byTousers")
+  doctors_doctors_modified_byTousers                     doctors[]           @relation("doctors_modified_byTousers")
+  doctors_doctors_user_idTousers                         doctors?            @relation("doctors_user_idTousers")
+  employees_employees_created_byTousers                  employees[]         @relation("employees_created_byTousers")
+  employees_employees_modified_byTousers                 employees[]         @relation("employees_modified_byTousers")
+  employees_employees_user_idTousers                     employees?          @relation("employees_user_idTousers")
+  hospital_counters_hospital_counters_created_byTousers  hospital_counters[] @relation("hospital_counters_created_byTousers")
+  hospital_counters_hospital_counters_modified_byTousers hospital_counters[] @relation("hospital_counters_modified_byTousers")
+  hospital_groups_hospital_groups_created_byTousers      hospital_groups[]   @relation("hospital_groups_created_byTousers")
+  hospital_groups_hospital_groups_modified_byTousers     hospital_groups[]   @relation("hospital_groups_modified_byTousers")
+  hospitals_hospitals_created_byTousers                  hospitals[]         @relation("hospitals_created_byTousers")
+  hospitals_hospitals_modified_byTousers                 hospitals[]         @relation("hospitals_modified_byTousers")
+  opd_visits_opd_visits_created_byTousers                opd_visits[]        @relation("opd_visits_created_byTousers")
+  opd_visits_opd_visits_modified_byTousers               opd_visits[]        @relation("opd_visits_modified_byTousers")
+  patients_patients_created_byTousers                    patients[]          @relation("patients_created_byTousers")
+  patients_patients_modified_byTousers                   patients[]          @relation("patients_modified_byTousers")
+  patients_patients_user_idTousers                       patients[]          @relation("patients_user_idTousers")
+  payments_payments_created_byTousers                    payments[]          @relation("payments_created_byTousers")
+  payments_payments_modified_byTousers                   payments[]          @relation("payments_modified_byTousers")
+  payments_payments_received_byTousers                   payments[]          @relation("payments_received_byTousers")
+  prescriptions_prescriptions_created_byTousers          prescriptions[]     @relation("prescriptions_created_byTousers")
+  prescriptions_prescriptions_modified_byTousers         prescriptions[]     @relation("prescriptions_modified_byTousers")
+  roles                                                  roles               @relation(fields: [role_id], references: [role_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model vitals {
+  vital_id       Int        @id @default(autoincrement())
+  opd_id         Int        @unique
+  height         Decimal?   @db.Decimal(5, 2)
+  weight         Decimal?   @db.Decimal(5, 2)
+  blood_pressure String?    @db.VarChar(20)
+  temperature    Decimal?   @db.Decimal(4, 1)
+  spo2           Int?
+  pulse          Int?
+  created_at     DateTime   @default(now()) @db.Timestamptz(6)
+  modified_at    DateTime   @default(now()) @db.Timestamptz(6)
+  opd_visits     opd_visits @relation(fields: [opd_id], references: [opd_id], onDelete: Cascade, onUpdate: NoAction)
+}
