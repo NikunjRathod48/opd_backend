@@ -30,6 +30,8 @@ export class MasterDataService {
         return this.prisma.states;
       case 'cities':
         return this.prisma.cities;
+      case 'blood_groups':
+        return this.prisma.blood_groups;
       default:
         throw new BadRequestException(`Invalid master data type: ${type}`);
     }
@@ -55,6 +57,8 @@ export class MasterDataService {
         return 'state_id';
       case 'cities':
         return 'city_id';
+      case 'blood_groups':
+        return 'blood_group_id';
       default:
         return 'id';
     }
@@ -130,6 +134,7 @@ export class MasterDataService {
       'specializations',
       'states',
       'cities',
+      'blood_groups',
     ];
     return typesWithIsActive.includes(type);
   }

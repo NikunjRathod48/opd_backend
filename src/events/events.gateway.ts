@@ -13,6 +13,7 @@ import { Logger } from '@nestjs/common';
         origin: '*', // We can restrict this in production
     },
 })
+
 export class EventsGateway
     implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
     @WebSocketServer()
