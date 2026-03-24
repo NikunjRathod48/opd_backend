@@ -6,6 +6,9 @@ import {
   UploadedFile,
   UseInterceptors,
   Request,
+  Param,
+  ParseIntPipe,
+  Put,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
@@ -44,5 +47,34 @@ export class UsersController {
   @Roles('Super Admin')
   async findAllUsers() {
     return this.usersService.getAllUsers();
+  }
+
+  // Get entire user profile with role relations (Admin)
+  @Get(':id')
+  @Roles('Super Admin', 'Group Admin', 'Hospital Admin', 'Receptionist', 'Doctor')
+  async getUserById(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.getUserById(id);
+  }
+
+  // Update generalized user profile (Admin)
+  @Put(':id')
+  @UseInterceptors(FileInterceptor('file'))
+  @Roles('Super Admin', 'Group Admin', 'Hospital Admin', 'Receptionist')
+  async updateUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateData: any,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.usersService.updateUser(id, updateData, file);
+  }
+
+  // Toggle user status (Admin)
+  @Patch(':id/status')
+  @Roles('Super Admin', 'Group Admin', 'Hospital Admin')
+  async toggleStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('is_active') is_active: boolean,
+  ) {
+    return this.usersService.toggleStatus(id, is_active);
   }
 }

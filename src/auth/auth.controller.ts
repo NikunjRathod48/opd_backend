@@ -58,8 +58,12 @@ export class AuthController {
 
   @Public()
   @Post('register')
-  async registerPatient(@Body() registerDto: RegisterPatientDto) {
-    return this.authService.registerPatient(registerDto);
+  @UseInterceptors(FileInterceptor('file'))
+  async registerPatient(
+    @Body() registerDto: RegisterPatientDto,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.authService.registerPatient(registerDto, file);
   }
 
   @Public()

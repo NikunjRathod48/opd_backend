@@ -325,7 +325,7 @@ export class AuthService {
     }
   }
 
-  async registerPatient(registerDto: RegisterPatientDto) {
+  async registerPatient(registerDto: RegisterPatientDto, file?: Express.Multer.File) {
     const {
       full_name,
       email,
@@ -366,6 +366,16 @@ export class AuthService {
     // Hash password using EncryptionService
     const passwordHash = await this.encryptionService.hashPassword(password);
 
+    // Upload profile image if provided
+    let profileImageUrl: string | null = null;
+    if (file) {
+      try {
+        profileImageUrl = await this.cloudinaryService.uploadImage(file);
+      } catch (err) {
+        console.error('Image upload failed', err);
+      }
+    }
+
     try {
       // Use transaction for atomicity
       const result = await this.prisma.$transaction(async (prisma) => {
@@ -378,6 +388,7 @@ export class AuthService {
             password_hash: passwordHash,
             role_id: patientRole.role_id,
             is_active: true,
+            profile_image_url: profileImageUrl,
             password_changed_at: new Date(),
           },
         });
@@ -444,9 +455,9 @@ export class AuthService {
             blood_group_id: registerDto.blood_group_id ? parseInt(registerDto.blood_group_id) : undefined,
             hospital_group_id: defaultGroup ? defaultGroup.hospital_group_id : undefined,
             address: address,
-            pincode: pincode,
-            state_id: Number(state_id),
-            city_id: Number(city_id),
+            pincode: pincode || "361006",
+            state_id: state_id ? Number(state_id) : undefined,
+            city_id: city_id ? Number(city_id) : undefined,
             emergency_contact_name: emergency_contact_name,
             emergency_contact_number: emergency_contact_number,
             created_by: newUser.user_id,
