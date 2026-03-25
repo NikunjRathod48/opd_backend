@@ -306,12 +306,16 @@ export class PatientsService {
 
   async findAll(query?: any) {
     const where: any = {};
-    if (query?.hospital_id) {
-      where.opd_visits = {
-        some: {
-          hospital_id: Number(query.hospital_id),
-        },
-      };
+    if (query?.patient_user_id) {
+      where.user_id = Number(query.patient_user_id);
+    } else if (query?.hospital_id) {
+      const hospital = await this.prisma.hospitals.findUnique({
+        where: { hospital_id: Number(query.hospital_id) },
+        select: { hospital_group_id: true },
+      });
+      if (hospital?.hospital_group_id) {
+        where.hospital_group_id = hospital.hospital_group_id;
+      }
     }
 
     const patients = await this.prisma.patients.findMany({
