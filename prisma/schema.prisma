@@ -30,6 +30,7 @@ model appointments {
   users_appointments_modified_byTousers users        @relation("appointments_modified_byTousers", fields: [modified_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
   patients                              patients     @relation(fields: [patient_id], references: [patient_id], onDelete: NoAction, onUpdate: NoAction)
   opd_visits                            opd_visits[]
+  queue_tokens                          queue_tokens[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -620,11 +621,15 @@ model queue_tokens {
   opd_id         Int?
   token_number   Int
   status         String       @db.VarChar(30)
+  visit_type     String       @default("WALK_IN") @db.VarChar(20)
+  priority       String       @default("NORMAL") @db.VarChar(20)
+  appointment_id Int?
   issued_at      DateTime     @default(now()) @db.Timestamptz(6)
   started_at     DateTime?    @db.Timestamptz(6)
   completed_at   DateTime?    @db.Timestamptz(6)
   daily_queues   daily_queues @relation(fields: [daily_queue_id], references: [daily_queue_id], onDelete: NoAction, onUpdate: NoAction)
   opd_visits     opd_visits?  @relation(fields: [opd_id], references: [opd_id], onDelete: NoAction, onUpdate: NoAction)
+  appointments   appointments? @relation(fields: [appointment_id], references: [appointment_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([daily_queue_id, token_number], map: "uq_queue_token")
 }

@@ -38,6 +38,7 @@ export class DoctorsController {
   }
 
   @Get('specializations')
+  @Roles('Super Admin', 'Group Admin', 'Hospital Admin', 'Doctor', 'Receptionist', 'Patient')
   getSpecializations() {
     return this.doctorsService.getSpecializations();
   }

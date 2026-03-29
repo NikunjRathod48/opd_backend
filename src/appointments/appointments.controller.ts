@@ -24,6 +24,15 @@ export class AppointmentsController {
     return this.appointmentsService.create(createAppointmentDto, userId || 1);
   }
 
+  @Get('availability')
+  getAvailability(
+    @Query('doctor_id') doctorId: string,
+    @Query('date') date: string,
+    @Query('patient_id') patientId?: string,
+  ) {
+    return this.appointmentsService.getAvailability(+doctorId, date, patientId ? +patientId : undefined);
+  }
+
   @Get()
   findAll(@Query() query: any) {
     return this.appointmentsService.findAll(query);
