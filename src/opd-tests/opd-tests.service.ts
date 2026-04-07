@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOpdTestDto } from './dto/create-opd-test.dto';
+import { EventsGateway } from '../events/events.gateway';
 
 @Injectable()
 export class OpdTestsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private eventsGateway: EventsGateway,
+  ) {}
 
   async create(createOpdTestDto: CreateOpdTestDto) {
     const { visit_id, tests } = createOpdTestDto;
@@ -86,9 +90,18 @@ export class OpdTestsService {
       data.completed_at = new Date();
     }
 
-    return this.prisma.opd_tests.update({
+    const updated = await this.prisma.opd_tests.update({
       where: { opd_test_id: id },
       data,
+      include: {
+        opd_visits: { select: { hospital_id: true } }
+      }
     });
+
+    if (test_status === 'Completed' && updated.opd_visits?.hospital_id) {
+      this.eventsGateway.broadcastQueueUpdate(updated.opd_visits.hospital_id);
+    }
+
+    return updated;
   }
 }

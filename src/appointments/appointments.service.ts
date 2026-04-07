@@ -4,6 +4,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { IdGeneratorService } from '../utils/id-generator.service';
 import { OpdService } from '../opd/opd.service';
+import { QueuesService } from '../queues/queues.service';
 
 @Injectable()
 export class AppointmentsService {
@@ -12,7 +13,8 @@ export class AppointmentsService {
     private idGenerator: IdGeneratorService,
     @Inject(forwardRef(() => OpdService))
     private opdService: OpdService,
-  ) {}
+    private queuesService: QueuesService,
+  ) { }
 
   async getAvailability(doctorId: number, dateStr: string, patientId?: number) {
     // Parse the date strictly from the YYYY-MM-DD part to avoid local timezone shifts
@@ -70,12 +72,16 @@ export class AppointmentsService {
     }
 
     const slots: any[] = [];
-    const capacityPerSlot = 3; // Fixed configuration
+    const capacityPerSlot = 1;
 
     const startHour = availability.start_time.getUTCHours();
     const startMin = availability.start_time.getUTCMinutes();
     const endHour = availability.end_time.getUTCHours();
     const endMin = availability.end_time.getUTCMinutes();
+
+    const totalMinutes = (endHour * 60 + endMin) - (startHour * 60 + startMin);
+    const maxAppointments = availability.max_appointments || 1;
+    const slotDuration = Math.max(1, Math.floor(totalMinutes / maxAppointments));
 
     const appointments = await this.prisma.appointments.findMany({
       where: {
@@ -108,7 +114,11 @@ export class AppointmentsService {
         isFull: bookedCount >= capacityPerSlot,
       });
 
-      current = new Date(current.getTime() + 15 * 60000); // 15 min slots
+      current = new Date(current.getTime() + slotDuration * 60000);
+    }
+
+    if (slots.length > maxAppointments) {
+      slots.length = maxAppointments;
     }
 
     return { slots, existingAppointment };
@@ -158,9 +168,22 @@ export class AppointmentsService {
 
     const timeStr = createAppointmentDto.appointment_time.substring(0, 5);
     const [hours, minutes] = timeStr.split(':').map(Number);
-    const appointmentTime = new Date(Date.UTC(1970, 0, 1, hours, minutes, 0));
+    const appointmentTime = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0));
 
-    const capacityPerSlot = 3;
+    const dayOfWeek = appointmentDate.getUTCDay() + 1;
+    const availability = await this.prisma.doctor_availability.findFirst({
+      where: {
+        doctor_id: createAppointmentDto.doctor_id,
+        day_of_week: dayOfWeek,
+        is_available: true,
+      },
+    });
+
+    if (!availability) {
+      throw new Error('Doctor is not available on this date.');
+    }
+
+    const capacityPerSlot = 1;
 
     return this.prisma.$transaction(async (tx) => {
       // 0. Prevent duplicate: same patient + same doctor + same date
@@ -211,47 +234,122 @@ export class AppointmentsService {
         },
       });
 
-      // 3. Queue Generation
-      let dailyQueue = await tx.daily_queues.findFirst({
+      // Queue Generation removed from here. Handled during Check-In.
+
+      return appointment;
+    });
+  }
+
+  async checkInAppointment(appointmentId: number, userId: number) {
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Fetch appointment
+      const appointment = await tx.appointments.findUnique({
+        where: { appointment_id: appointmentId },
+      });
+
+      if (!appointment) {
+        throw new Error('Appointment not found');
+      }
+
+      // 2. Validate appointment is for TODAY
+      const today = new Date();
+      const isToday =
+        appointment.appointment_date.getUTCFullYear() === today.getUTCFullYear() &&
+        appointment.appointment_date.getUTCMonth() === today.getUTCMonth() &&
+        appointment.appointment_date.getUTCDate() === today.getUTCDate();
+
+      if (!isToday) {
+        throw new Error('You can only check-in for appointments scheduled for today.');
+      }
+
+      // 3. Validate appointment not already checked-in
+      if (appointment.appointment_status === 'Checked-In') {
+        const existingToken = await tx.queue_tokens.findFirst({
+          where: { appointment_id: appointmentId },
+        });
+        if (existingToken) {
+          return existingToken;
+        }
+      }
+
+      if (['Cancelled', 'No-Show', 'Completed'].includes(appointment.appointment_status)) {
+        throw new Error(`Cannot check-in. Appointment is ${appointment.appointment_status}.`);
+      }
+
+      // 4. ⏰ Time-aware priority calculation
+      // appointment_time is stored as TIME (no timezone) in local time
+      // Prisma reads it as Date — getUTCHours() gives the raw stored local hour
+      const apptHour = appointment.appointment_time.getUTCHours();
+      const apptMinute = appointment.appointment_time.getUTCMinutes();
+      const nowHour = today.getHours();    // LOCAL time
+      const nowMinute = today.getMinutes(); // LOCAL time
+
+      const apptTotalMinutes = apptHour * 60 + apptMinute;
+      const nowTotalMinutes = nowHour * 60 + nowMinute;
+
+      const EARLY_BUFFER_MIN = 60;  // 1 hour before appointment
+      const LATE_BUFFER_MIN = 30;   // 30 min grace after appointment
+
+      let priority = 'Normal'; // default: treated like walk-in
+
+      if (
+        nowTotalMinutes >= (apptTotalMinutes - EARLY_BUFFER_MIN) &&
+        nowTotalMinutes <= (apptTotalMinutes + LATE_BUFFER_MIN)
+      ) {
+        priority = 'Medium'; // ✅ Valid check-in window → appointment priority
+      }
+      // else: too early or too late → stays Normal (no unfair advantage)
+
+      // 5. Ensure today's queue exists (auto-create if needed via fallback)
+      const dailyQueue = await this.queuesService.ensureQueueExists(
+        appointment.hospital_id,
+        appointment.doctor_id,
+        userId,
+      );
+
+      // 6. Prevent duplicate active token for same appointment in this queue
+      const existingActive = await tx.queue_tokens.findFirst({
         where: {
-          hospital_id: createAppointmentDto.hospital_id,
-          doctor_id: createAppointmentDto.doctor_id,
-          queue_date: appointmentDate,
+          daily_queue_id: dailyQueue.daily_queue_id,
+          appointment_id: appointmentId,
+          status: { in: ['Waiting', 'In Progress'] },
         },
       });
 
-      if (!dailyQueue) {
-        dailyQueue = await tx.daily_queues.create({
-          data: {
-            hospital_id: createAppointmentDto.hospital_id,
-            doctor_id: createAppointmentDto.doctor_id,
-            queue_date: appointmentDate,
-            status: 'Active',
-            created_by: userId,
-            modified_by: userId,
-          },
-        });
+      if (existingActive) {
+        throw new Error('This patient already has an active token in this queue.');
       }
 
-      // 4. Token Generation with proper ordering consideration
-      const lastToken = await tx.queue_tokens.findFirst({
+      // 7. Generate token with computed priority
+      const maxToken = await tx.queue_tokens.aggregate({
         where: { daily_queue_id: dailyQueue.daily_queue_id },
-        orderBy: { token_number: 'desc' },
+        _max: { token_number: true },
       });
-      const nextTokenNumber = lastToken ? lastToken.token_number + 1 : 1;
+      const nextTokenNumber = (maxToken._max.token_number ?? 0) + 1;
 
-      await tx.queue_tokens.create({
+      const newToken = await tx.queue_tokens.create({
         data: {
           daily_queue_id: dailyQueue.daily_queue_id,
           token_number: nextTokenNumber,
           status: 'Waiting',
-          visit_type: 'APPOINTMENT',
-          priority: 'HIGH',
+          visit_type: 'Appointment',
+          priority,
           appointment_id: appointment.appointment_id,
         },
       });
 
-      return appointment;
+      // 8. Update appointment status
+      await tx.appointments.update({
+        where: { appointment_id: appointmentId },
+        data: {
+          appointment_status: 'Checked-In',
+          modified_by: userId,
+          modified_at: new Date(),
+        },
+      });
+
+      // 9. Return token
+      return newToken;
     });
   }
 
@@ -293,6 +391,9 @@ export class AppointmentsService {
             users_doctors_user_idTousers: { select: { full_name: true } },
           },
         },
+        queue_tokens: {
+          select: { token_number: true },
+        },
       },
       orderBy: { appointment_date: 'desc' },
     });
@@ -311,6 +412,7 @@ export class AppointmentsService {
         apt.doctors?.users_doctors_user_idTousers?.full_name ||
         'Unknown Doctor',
       type: 'Consultation',
+      token_number: apt.queue_tokens?.[0]?.token_number, // Extract the token number if available
     }));
   }
 

@@ -24,6 +24,12 @@ export class AppointmentsController {
     return this.appointmentsService.create(createAppointmentDto, userId || 1);
   }
 
+  @Post('check-in/:id')
+  checkInAppointment(@Param('id') id: string, @Req() req: any) {
+    const userId = req.user?.userId || 1;
+    return this.appointmentsService.checkInAppointment(+id, userId);
+  }
+
   @Get('availability')
   getAvailability(
     @Query('doctor_id') doctorId: string,

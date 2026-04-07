@@ -8,5 +8,6 @@ import { EventsModule } from '../events/events.module';
   imports: [PrismaModule, EventsModule],
   controllers: [QueuesController],
   providers: [QueuesService],
+  exports: [QueuesService],
 })
 export class QueuesModule { }

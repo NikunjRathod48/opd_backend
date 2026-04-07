@@ -18,4 +18,11 @@ export class CreateOpdVisitDto {
   @IsString()
   @IsOptional()
   chief_complaint?: string;
+
+  @IsOptional()
+  is_follow_up?: boolean;
+
+  @IsInt()
+  @IsOptional()
+  old_opd_id?: number;
 }

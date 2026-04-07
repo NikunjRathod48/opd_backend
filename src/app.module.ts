@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -25,6 +26,7 @@ import { QueuesModule } from './queues/queues.module';
 import { ReportsModule } from './reports/reports.module';
 import { EventsModule } from './events/events.module';
 import { FollowupsModule } from './followups/followups.module';
+import { PublicDisplayModule } from './public-display/public-display.module';
 
 @Module({
   imports: [
@@ -48,7 +50,9 @@ import { FollowupsModule } from './followups/followups.module';
     ReportsModule,
     EventsModule,
     FollowupsModule,
+    PublicDisplayModule,
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
   ],
   controllers: [AppController],
   providers: [

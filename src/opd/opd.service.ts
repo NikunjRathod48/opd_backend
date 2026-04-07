@@ -39,9 +39,15 @@ export class OpdService {
 
     if (!doctorId) throw new BadRequestException('Doctor ID is required');
 
-    // 2. Duplicate active visit prevention
-    //    is_active is Boolean? (nullable) — null and true both mean "active"
-    //    So we use NOT: { is_active: false } to match both null and true
+    // 1. If appointment exists -> reuse OPD
+    if (dto.appointment_id) {
+      const existing = await this.prisma.opd_visits.findFirst({
+        where: { appointment_id: dto.appointment_id },
+      });
+      if (existing) return existing;
+    }
+
+    // 2. fallback: active visit check
     const existingActive = await this.prisma.opd_visits.findFirst({
       where: {
         hospital_id: dto.hospital_id,
@@ -62,21 +68,9 @@ export class OpdService {
       userId,
     );
 
-    // 4. Check if this is a follow-up (patient has a recent discharged visit with same doctor)
-    let isFollowUp = false;
-    let oldOpdId: number | null = null;
-    const recentVisit = await this.prisma.opd_visits.findFirst({
-      where: {
-        patient_id: dto.patient_id,
-        doctor_id: doctorId,
-        is_active: false,
-      },
-      orderBy: { visit_datetime: 'desc' },
-    });
-    if (recentVisit) {
-      isFollowUp = true;
-      oldOpdId = recentVisit.opd_id;
-    }
+    // 4. Use front-end provided follow-up details (No auto-detect as per requirements)
+    const isFollowUp = dto.is_follow_up || false;
+    const oldOpdId = dto.old_opd_id || null;
 
     // 5. Create Visit
     const visit = await this.prisma.opd_visits.create({
@@ -176,11 +170,13 @@ export class OpdService {
           },
         },
         opd_diagnoses: { include: { diagnoses: true } },
+        opd_tests: { include: { tests: true } },
       },
       orderBy: { visit_datetime: 'desc' },
     });
 
     return visits.map((v) => ({
+      ...v,
       opdid: v.opd_id,
       hospitalid: v.hospital_id,
       patientid: v.patient_id,
@@ -220,7 +216,6 @@ export class OpdService {
   async update(id: number, dto: UpdateOpdVisitDto, userId: number) {
     // Handle Diagnosis Update if provided
     if (dto.diagnosis) {
-      // 1. Find or Create Diagnosis in Master
       let diagnosisMaster = await this.prisma.diagnoses.findFirst({
         where: {
           diagnosis_name: { equals: dto.diagnosis, mode: 'insensitive' },
@@ -228,35 +223,26 @@ export class OpdService {
       });
 
       if (!diagnosisMaster) {
-        // Create new diagnosis master
         diagnosisMaster = await this.prisma.diagnoses.create({
           data: {
-            diagnosis_code: `D-${Date.now()}`, // Simple unique code generation
+            diagnosis_code: `D-${Date.now()}`,
             diagnosis_name: dto.diagnosis,
-            department_id: 1, // Defaulting to General Department (ID 1)
+            department_id: 1,
             description: 'Auto-created from OPD Visit',
           },
         });
       }
 
-      // 2. Link to OPD Visit (Upsert or Update Primary)
-      // Check if there's already a primary diagnosis
       const existingPrimary = await this.prisma.opd_diagnoses.findFirst({
         where: { visit_id: id, is_primary: true },
       });
 
       if (existingPrimary) {
-        // Update existing primary to point to new diagnosis
-        try {
-          await this.prisma.opd_diagnoses.update({
-            where: { opd_diagnosis_id: existingPrimary.opd_diagnosis_id },
-            data: { diagnosis_id: diagnosisMaster.diagnosis_id },
-          });
-        } catch (e) {
-          console.warn('Could not update diagnosis link due to constraint', e);
-        }
+        await this.prisma.opd_diagnoses.update({
+          where: { opd_diagnosis_id: existingPrimary.opd_diagnosis_id },
+          data: { diagnosis_id: diagnosisMaster.diagnosis_id },
+        });
       } else {
-        // Create new primary link
         const existingLink = await this.prisma.opd_diagnoses.findUnique({
           where: {
             visit_id_diagnosis_id: {
@@ -295,12 +281,48 @@ export class OpdService {
       },
     });
 
-    // === Discharge side-effects ===
+    // ===============================
+    // ✅ DISCHARGE FLOW
+    // ===============================
     if (updateData.is_active === false) {
-      // 1. Auto-complete appointment
-      if (updatedOpd.appointment_id) {
+
+      // 1. Find linked token (if any)
+      const linkedToken = await this.prisma.queue_tokens.findFirst({
+        where: { opd_id: id, status: 'In Progress' },
+      });
+
+      // 2. Complete token
+      if (linkedToken) {
+        await this.prisma.queue_tokens.update({
+          where: { token_id: linkedToken.token_id },
+          data: {
+            status: 'Completed',
+            completed_at: new Date(),
+          },
+        });
+
+        // Broadcast queue update safely
+        if (linkedToken.daily_queue_id) {
+          const tokenQueue = await this.prisma.daily_queues.findUnique({
+            where: { daily_queue_id: linkedToken.daily_queue_id },
+          });
+
+          if (tokenQueue?.hospital_id) {
+            this.eventsGateway.broadcastQueueUpdate(
+              tokenQueue.hospital_id,
+              tokenQueue.daily_queue_id
+            );
+          }
+        }
+      }
+
+      // 3. COMPLETE APPOINTMENT (single unified logic)
+      const appointmentId =
+        updatedOpd.appointment_id || linkedToken?.appointment_id;
+
+      if (appointmentId) {
         await this.prisma.appointments.update({
-          where: { appointment_id: updatedOpd.appointment_id },
+          where: { appointment_id: appointmentId },
           data: {
             appointment_status: 'Completed',
             modified_by: userId,
@@ -309,34 +331,20 @@ export class OpdService {
         });
       }
 
-      // 2. Auto-complete linked in-progress token
-      const linkedToken = await this.prisma.queue_tokens.findFirst({
-        where: { opd_id: id, status: 'In Progress' },
-      });
-      if (linkedToken) {
-        await this.prisma.queue_tokens.update({
-          where: { token_id: linkedToken.token_id },
-          data: { status: 'Completed', completed_at: new Date() },
-        });
-        // Broadcast queue update for the token's queue
-        const tokenQueue = await this.prisma.daily_queues.findUnique({
-          where: { daily_queue_id: linkedToken.daily_queue_id },
-        });
-        if (tokenQueue) {
-          this.eventsGateway.broadcastQueueUpdate(tokenQueue.hospital_id, tokenQueue.daily_queue_id);
-        }
-      }
-
-      // 3. Auto-generate draft bill from prescribed items
+      // 4. Auto-generate bill
       await this.autoGenerateBill(id, updatedOpd.hospital_id, userId);
     }
 
-    // Broadcast visit updated event
-    this.eventsGateway.broadcastVisitUpdated(updatedOpd.hospital_id, updatedOpd.opd_id);
+    // Broadcast visit update
+    this.eventsGateway.broadcastVisitUpdated(
+      updatedOpd.hospital_id,
+      updatedOpd.opd_id
+    );
 
     return updatedOpd;
   }
 
+  
   // --- CLINICAL ---
 
   async addDiagnosis(opdId: number, dto: AddDiagnosisDto) {
@@ -389,15 +397,38 @@ export class OpdService {
     userId: number,
   ) {
     // 1. Create Prescription Header
-    const prescription = await this.prisma.prescriptions.create({
-      data: {
-        visit_id: opdId,
-        doctor_id: dto.doctor_id,
-        notes: dto.notes,
-        created_by: userId,
-        is_active: true,
-      },
+    // prevent duplicate active prescription
+    const existing = await this.prisma.prescriptions.findFirst({
+      where: { visit_id: opdId, is_active: true },
     });
+
+    let prescription = existing;
+
+    if (!prescription) {
+      // Resolve doctor_id: use dto value, fallback to the visit's own doctor
+      let resolvedDoctorId: number | undefined = dto.doctor_id;
+      if (!resolvedDoctorId) {
+        const visit = await this.prisma.opd_visits.findUnique({
+          where: { opd_id: opdId },
+          select: { doctor_id: true },
+        });
+        resolvedDoctorId = visit?.doctor_id;
+      }
+      if (!resolvedDoctorId) {
+        throw new Error('Cannot create prescription: doctor_id is missing and could not be resolved from the visit.');
+      }
+      const finalDoctorId: number = resolvedDoctorId;
+
+      prescription = await this.prisma.prescriptions.create({
+        data: {
+          visit_id: opdId,
+          doctor_id: finalDoctorId,
+          notes: dto.notes,
+          created_by: userId,
+          is_active: true,
+        },
+      });
+    }
 
     // 2. Add Items
     if (dto.items && dto.items.length > 0) {

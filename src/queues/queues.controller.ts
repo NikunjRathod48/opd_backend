@@ -14,7 +14,7 @@ import { Roles } from '../auth/roles.decorator';
 @Controller('queues')
 @Roles('Hospital Admin', 'Doctor', 'Receptionist')
 export class QueuesController {
-  constructor(private readonly queuesService: QueuesService) {}
+  constructor(private readonly queuesService: QueuesService) { }
 
   @Post()
   createQueue(
@@ -54,9 +54,22 @@ export class QueuesController {
   @Post(':id/tokens')
   generateToken(
     @Param('id') queueId: string,
-    @Body() body: { opd_id?: number | null },
+    @Body() body: { opd_id?: number | null; priority?: string; status?: string; appointment_id?: number },
   ) {
-    return this.queuesService.generateToken(+queueId, body.opd_id);
+    return this.queuesService.generateToken(
+      +queueId,
+      body.opd_id,
+      body.priority,
+      body.status,
+      body.appointment_id,
+    );
+  }
+
+  @Post('tokens/return')
+  generateReturnToken(
+    @Body() body: { opd_id: number; },
+  ) {
+    return this.queuesService.generateReturnToken(body.opd_id);
   }
 
   @Get(':id/tokens')
@@ -76,7 +89,9 @@ export class QueuesController {
   updateTokenStatus(
     @Param('tokenId') tokenId: string,
     @Body('status') status: string,
+    @Req() req: any,
   ) {
-    return this.queuesService.updateTokenStatus(+tokenId, status);
+    const userId = req.user?.userId || 1;
+    return this.queuesService.updateTokenStatus(+tokenId, status, userId);
   }
 }

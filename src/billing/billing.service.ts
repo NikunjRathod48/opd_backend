@@ -136,7 +136,9 @@ export class BillingService {
       .filter((p) => p.payment_status === 'Success')
       .reduce((sum, p) => sum + Number(p.amount_paid), 0);
 
-    const newPaymentAmount = Number(amount_paid) || Number(bill.total_amount) - existingPaid;
+    const newPaymentAmount = paymentData.amount_paid !== undefined && paymentData.amount_paid !== null 
+      ? Number(paymentData.amount_paid) 
+      : Number(bill.total_amount) - existingPaid;
 
     // Create payment record
     await this.prisma.payments.create({

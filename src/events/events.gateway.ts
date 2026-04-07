@@ -51,6 +51,28 @@ export class EventsGateway
     }
 
     /**
+     * Broadcasts detailed token status change for TV display voice announcements.
+     * Emitted ONLY when a token transitions to "In Progress".
+     * Contains the minimal data needed for the Gujarati + Hindi announcement.
+     */
+    broadcastTokenStatusChange(
+        hospitalId: number,
+        data: {
+            token_number: number;
+            patient_name: string;
+            doctor_name: string;
+            doctor_id: number;
+            status: string;
+        },
+    ) {
+        this.server.to(`hospital_${hospitalId}`).emit('token:status-changed', {
+            hospitalId,
+            ...data,
+            timestamp: new Date().toISOString(),
+        });
+    }
+
+    /**
      * Broadcasts a stock update or low stock alert event.
      */
     broadcastStockAlert(hospitalId: number, medicineId: number, medicineName: string, newStock: number) {
