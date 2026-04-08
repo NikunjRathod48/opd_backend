@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { IdGeneratorService } from '../utils/id-generator.service';
 import { EventsGateway } from '../events/events.gateway';
 import { CreateBillingDto } from './dto/create-billing.dto';
+const Razorpay = require('razorpay');
 
 @Injectable()
 export class BillingService {
@@ -284,5 +285,36 @@ export class BillingService {
           latestPayment?.payment_modes?.payment_mode_name || null,
       };
     });
+  }
+
+  /**
+   * Create Razorpay Order
+   */
+  async createRazorpayOrder(id: number, amountPaid: number) {
+    const bill = await this.prisma.billing.findUnique({
+      where: { bill_id: id },
+    });
+    if (!bill) throw new NotFoundException('Bill not found');
+
+    const amountToPay = amountPaid ? Number(amountPaid) : Number(bill.total_amount);
+
+    const razorpay = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID || 'dummy_key_id',
+      key_secret: process.env.RAZORPAY_KEY_SECRET || 'dummy_key_secret',
+    });
+
+    const options = {
+      amount: Math.round(amountToPay * 100), // amount in the smallest currency unit (paise)
+      currency: 'INR',
+      receipt: `receipt_bill_${id}`,
+    };
+
+    try {
+      const order = await razorpay.orders.create(options);
+      return { order_id: order.id, amount: options.amount, currency: options.currency };
+    } catch (error) {
+      console.error('Razorpay order creation failed', error);
+      throw new BadRequestException('Failed to create Razorpay order');
+    }
   }
 }

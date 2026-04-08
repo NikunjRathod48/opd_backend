@@ -35,6 +35,11 @@ export class BillingController {
     return this.billingService.payBill(+id, paymentData, userId);
   }
 
+  @Post(':id/razorpay-order')
+  createRazorpayOrder(@Param('id') id: string, @Body() body: any) {
+    return this.billingService.createRazorpayOrder(+id, body.amount_paid);
+  }
+
   @Get()
   @Roles('Super Admin', 'Group Admin', 'Hospital Admin', 'Doctor', 'Receptionist', 'Patient')
   findAll(@Query() query: any) {
