@@ -108,7 +108,9 @@ export class PrescriptionsService {
       const rx = await tx.prescriptions.findUnique({
         where: { prescription_id: id },
         include: {
-          prescription_items: true,
+          prescription_items: {
+            include: { medicines: true }
+          },
           opd_visits: true,
         },
       });
@@ -132,14 +134,14 @@ export class PrescriptionsService {
 
         if (hospMed) {
           if (hospMed.stock_quantity < item.quantity) {
-             console.warn(`Insufficient stock for medicine ID ${item.medicine_id}. Dispensing anyway, will go negative.`);
+             throw new BadRequestException(`Insufficient stock for medicine: ${item.medicines?.medicine_name || item.medicine_id}`);
           }
           await tx.hospital_medicines.update({
             where: { hospital_medicine_id: hospMed.hospital_medicine_id },
             data: { stock_quantity: hospMed.stock_quantity - item.quantity },
           });
         } else {
-           console.warn(`Medicine ID ${item.medicine_id} not mapped to hospital ID ${hospital_id}. Cannot deduct stock.`);
+           throw new BadRequestException(`Medicine ${item.medicines?.medicine_name || item.medicine_id} not found in hospital inventory`);
         }
       }
 
