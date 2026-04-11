@@ -175,8 +175,9 @@ export class IdGeneratorService {
   async generateBillNumber(
     hospitalId: number,
     userId: number = 1,
+    client: any = null,
   ): Promise<string> {
-    return this.prisma.$transaction(async (tx) => {
+    const operation = async (tx: any) => {
       const hospital = await tx.hospitals.findUnique({
         where: { hospital_id: hospitalId },
         select: { hospital_code: true },
@@ -214,6 +215,11 @@ export class IdGeneratorService {
       });
 
       return `RCPT-${hospCode}-${monthStr}-${nextVal.toString().padStart(4, '0')}`;
-    });
+    };
+
+    if (client) {
+        return operation(client);
+    }
+    return this.prisma.$transaction(operation);
   }
 }

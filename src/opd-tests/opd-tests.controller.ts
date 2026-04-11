@@ -24,6 +24,11 @@ export class OpdTestsController {
     return this.opdTestsService.findPendingByHospital(+hospitalId);
   }
 
+  @Get('completed/hospital/:hospitalId')
+  findCompletedByHospital(@Param('hospitalId') hospitalId: string) {
+    return this.opdTestsService.findCompletedByHospital(+hospitalId);
+  }
+
   @Patch(':id')
   updateResult(
     @Param('id') id: string,

@@ -60,7 +60,9 @@ export class OpdTestsService {
         ]
       },
       include: {
-        tests: true,
+        tests: {
+          include: { test_parameters: true }
+        },
         opd_visits: {
           include: {
             patients: {
@@ -81,6 +83,40 @@ export class OpdTestsService {
         }
       },
       orderBy: { ordered_at: 'desc' },
+    });
+  }
+
+  async findCompletedByHospital(hospital_id: number) {
+    return this.prisma.opd_tests.findMany({
+      where: {
+        AND: [
+          { test_status: 'Completed' },
+          { opd_visits: { hospital_id } }
+        ]
+      },
+      include: {
+        tests: {
+          include: { test_parameters: true }
+        },
+        opd_visits: {
+          include: {
+            patients: {
+              include: {
+                users_patients_user_idTousers: { select: { full_name: true, phone_number: true } },
+                blood_groups: true
+              }
+            },
+            doctors: {
+              include: {
+                users_doctors_user_idTousers: { select: { full_name: true } },
+                specializations: true
+              }
+            },
+            hospitals: true // Required for PDF report generation
+          }
+        }
+      },
+      orderBy: { completed_at: 'desc' },
     });
   }
 

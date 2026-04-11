@@ -200,17 +200,32 @@ export class BillingService {
     const bill = await this.prisma.billing.findUnique({
       where: { bill_id: id },
       include: {
+        hospitals: true,
         bill_items: true,
         payments: {
           include: { payment_modes: true },
         },
         opd_visits: {
-          include: { patients: true, doctors: true },
+          include: { 
+            patients: {
+              include: { users_patients_user_idTousers: true }
+            }, 
+            doctors: true 
+          },
         },
       },
     });
     if (!bill) throw new NotFoundException('Bill not found');
-    return bill;
+
+    const successfulPayments = bill.payments.filter((p) => p.payment_status === 'Success');
+    const latestPayment = successfulPayments.length > 0 ? successfulPayments[successfulPayments.length - 1] : null;
+
+    return {
+      ...bill,
+      patientName: bill.opd_visits?.patients?.users_patients_user_idTousers?.full_name || 'Unknown',
+      patientid: bill.opd_visits?.patient_id,
+      paymentModeName: latestPayment?.payment_modes?.payment_mode_name || null,
+    };
   }
 
   /**
@@ -247,6 +262,7 @@ export class BillingService {
     const bills = await this.prisma.billing.findMany({
       where,
       include: {
+        hospitals: true,
         bill_items: true,
         payments: {
           include: { payment_modes: true },

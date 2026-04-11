@@ -158,8 +158,14 @@ export class MasterDataService {
         });
       }
 
+      const include: any = {};
+      if (type === 'tests') {
+         include.test_parameters = true;
+      }
+
       const items = await (delegate as any).findMany({
         where,
+        ...(Object.keys(include).length > 0 && { include }),
         orderBy: { [idField]: 'desc' },
       });
 
@@ -184,13 +190,19 @@ export class MasterDataService {
       where.is_active = true;
     }
 
+    const relationInclude: any = {
+      [relationField]: {
+        where: { hospital_id: hospitalId },
+      },
+    };
+
+    if (type === 'tests') {
+      relationInclude.test_parameters = true;
+    }
+
     const masterItems = await (delegate as any).findMany({
       where,
-      include: {
-        [relationField]: {
-          where: { hospital_id: hospitalId },
-        },
-      },
+      include: relationInclude,
       orderBy: { [idField]: 'asc' },
     });
 

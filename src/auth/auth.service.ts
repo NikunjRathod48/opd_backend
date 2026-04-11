@@ -3,26 +3,44 @@ import {
   ConflictException,
   InternalServerErrorException,
   UnauthorizedException,
+  BadRequestException,
+  NotFoundException,
   Req,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterSuperAdminDto } from './dto/register-super-admin.dto';
 import { RegisterPatientDto } from './dto/register-patient.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { EncryptionService } from './encryption.service';
 import { JwtService } from '@nestjs/jwt';
 import { RegisterGroupAdminDto } from './dto/register-group-admin.dto';
 import { RegisterHospitalAdminDto } from './dto/register-hospital-admin.dto';
 import { RegisterReceptionistDto } from './dto/register-receptionist.dto';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import * as nodemailer from 'nodemailer';
+
+// In-memory OTP store — no database needed
+interface OtpEntry {
+  otpHash: string;
+  userId: number;
+  expiresAt: Date;
+  verified: boolean; // Marks OTP as verified so reset can proceed
+}
 
 @Injectable()
 export class AuthService {
+  private resetTokens = new Map<string, OtpEntry>();
+
   constructor(
     private prisma: PrismaService,
     private encryptionService: EncryptionService,
     private jwtService: JwtService,
     private cloudinaryService: CloudinaryService,
+    private configService: ConfigService,
   ) { }
 
   async registerSuperAdmin(registerDto: RegisterSuperAdminDto) {
@@ -556,5 +574,231 @@ export class AuthService {
       access_token: this.jwtService.sign(payload),
       user: frontendUser,
     };
+  }
+
+  // ─── Forgot Password Flow ─────────────────────────────────────────
+
+  /**
+   * Step 1: Send OTP to user's email
+   */
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const email = dto.email.trim().toLowerCase();
+
+    // Clean up expired tokens on every request
+    this.cleanupExpiredTokens();
+
+    // Find user by email
+    const user = await this.prisma.users.findFirst({
+      where: { email },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Email not found in our records.');
+    }
+
+    if (!user.is_active) {
+      throw new BadRequestException('This account is inactive. Please contact admin.');
+    }
+
+    // Rate limiting: prevent spamming — if an OTP was sent in the last 60 seconds, reject
+    const existing = this.resetTokens.get(email);
+    if (existing) {
+      const timeSinceSent = Date.now() - (existing.expiresAt.getTime() - 10 * 60 * 1000);
+      if (timeSinceSent < 60 * 1000) {
+        throw new BadRequestException('Please wait 60 seconds before requesting a new OTP.');
+      }
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await this.encryptionService.hashPassword(otp);
+
+    // Store in memory (expires in 10 minutes)
+    this.resetTokens.set(email, {
+      otpHash,
+      userId: user.user_id,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      verified: false,
+    });
+
+    // Send email
+    try {
+      await this.sendOtpEmail(email, otp, user.full_name);
+    } catch (error) {
+      console.error('Failed to send OTP email:', error);
+      this.resetTokens.delete(email);
+      throw new InternalServerErrorException('Failed to send OTP email. Please try again.');
+    }
+
+    return { message: `OTP has been sent to ${email}` };
+  }
+
+  /**
+   * Step 2: Verify OTP
+   */
+  async verifyOtp(dto: VerifyOtpDto) {
+    const email = dto.email.trim().toLowerCase();
+    const entry = this.resetTokens.get(email);
+
+    if (!entry) {
+      throw new BadRequestException('No OTP was requested for this email. Please request a new one.');
+    }
+
+    // Check expiry
+    if (new Date() > entry.expiresAt) {
+      this.resetTokens.delete(email);
+      throw new BadRequestException('OTP has expired. Please request a new one.');
+    }
+
+    // Verify OTP
+    const isValid = await this.encryptionService.comparePassword(dto.otp, entry.otpHash);
+    if (!isValid) {
+      throw new BadRequestException('Invalid OTP. Please try again.');
+    }
+
+    // Mark as verified (so resetPassword can proceed)
+    entry.verified = true;
+    this.resetTokens.set(email, entry);
+
+    return { message: 'OTP verified successfully. You can now reset your password.' };
+  }
+
+  /**
+   * Step 3: Reset password (after OTP is verified)
+   */
+  async resetPassword(dto: ResetPasswordDto) {
+    const email = dto.email.trim().toLowerCase();
+    const entry = this.resetTokens.get(email);
+
+    if (!entry) {
+      throw new BadRequestException('No OTP session found. Please start over.');
+    }
+
+    // Check expiry
+    if (new Date() > entry.expiresAt) {
+      this.resetTokens.delete(email);
+      throw new BadRequestException('Session expired. Please request a new OTP.');
+    }
+
+    // Ensure OTP was verified first
+    if (!entry.verified) {
+      throw new BadRequestException('OTP has not been verified yet.');
+    }
+
+    // Verify OTP one more time for security
+    const isValid = await this.encryptionService.comparePassword(dto.otp, entry.otpHash);
+    if (!isValid) {
+      throw new BadRequestException('Invalid OTP.');
+    }
+
+    // Update password
+    const passwordHash = await this.encryptionService.hashPassword(dto.newPassword);
+    await this.prisma.users.update({
+      where: { user_id: entry.userId },
+      data: {
+        password_hash: passwordHash,
+        password_changed_at: new Date(),
+      },
+    });
+
+    // Clean up — OTP is consumed
+    this.resetTokens.delete(email);
+
+    return { message: 'Password has been reset successfully. You can now login.' };
+  }
+
+  // ─── Helper Methods ───────────────────────────────────────────────
+
+  /**
+   * Remove expired entries from the in-memory store
+   */
+  private cleanupExpiredTokens() {
+    const now = new Date();
+    for (const [email, entry] of this.resetTokens.entries()) {
+      if (now > entry.expiresAt) {
+        this.resetTokens.delete(email);
+      }
+    }
+  }
+
+  /**
+   * Send OTP email using nodemailer
+   */
+  private async sendOtpEmail(email: string, otp: string, userName: string) {
+    const smtpEmail = this.configService.get<string>('SMTP_EMAIL');
+    const smtpPassword = this.configService.get<string>('SMTP_PASSWORD');
+
+    if (!smtpEmail || !smtpPassword) {
+      throw new Error('SMTP_EMAIL and SMTP_PASSWORD environment variables are required.');
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      auth: {
+        user: smtpEmail,
+        pass: smtpPassword,
+      },
+    });
+
+    const mailOptions = {
+      from: `"MedCore" <${smtpEmail}>`,
+      to: email,
+      subject: 'Password Reset OTP - MedCore',
+      html: `
+      
+      <div style="font-family: 'Inter', 'Segoe UI', Arial, sans-serif; background-color: #f3f4f6; padding: 40px 0; min-height: 100vh;">
+        <div style="max-width: 500px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);">
+          
+          <!-- Header -->
+          <div style="background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 32px 24px; text-align: center;">
+            <div style="display: inline-block; background-color: rgba(255, 255, 255, 0.15); backdrop-filter: blur(8px); padding: 12px; border-radius: 16px; margin-bottom: 16px; border: 1px solid rgba(255, 255, 255, 0.3);">
+              <div style="background-color: #ffffff; color: #1e3a8a; width: 40px; height: 40px; border-radius: 10px; display: block; text-align: center; font-size: 24px; font-weight: 900; margin: 0 auto; line-height: 40px;">M</div>
+            </div>
+            <h1 style="color: #ffffff; font-size: 24px; font-weight: 700; margin: 0; letter-spacing: -0.5px;">Verify Your Identity</h1>
+          </div>
+          
+          <!-- Body -->
+          <div style="padding: 32px 24px;">
+            <p style="color: #4b5563; font-size: 16px; line-height: 24px; margin-top: 0; margin-bottom: 24px;">
+              Hello <strong>${userName}</strong>,
+            </p>
+            <p style="color: #4b5563; font-size: 16px; line-height: 24px; margin-top: 0; margin-bottom: 24px;">
+              We received a request to reset the password for your MedCore account. Use the secure verification code below to proceed:
+            </p>
+            
+            <!-- OTP Box -->
+            <div style="background-color: #f8fafc; border: 2px dashed #93c5fd; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 32px;">
+              <div style="font-family: monospace; font-size: 36px; font-weight: 700; color: #1d4ed8; letter-spacing: 12px; margin-left: 12px;">${otp}</div>
+            </div>
+            
+            <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 16px; border-radius: 0 8px 8px 0; margin-bottom: 24px;">
+              <p style="color: #991b1b; font-size: 14px; margin: 0; font-weight: 500;">
+                ⚠️ This code expires in exactly <span style="font-weight: 800;">10 minutes</span>.
+              </p>
+            </div>
+            
+            <p style="color: #6b7280; font-size: 14px; line-height: 20px; border-top: 1px solid #e5e7eb; padding-top: 24px; margin-top: 0; margin-bottom: 0;">
+              If you didn't request a password reset, you can safely ignore this email. Your account remains secure.
+            </p>
+          </div>
+          
+          <!-- Footer -->
+          <div style="background-color: #f9fafb; border-top: 1px solid #e5e7eb; padding: 24px; text-align: center;">
+            <p style="color: #9ca3af; font-size: 12px; margin: 0 0 8px;">
+              MedCore Hospital Management System
+            </p>
+            <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+              &copy; ${new Date().getFullYear()} MedCore. All rights reserved.
+            </p>
+          </div>
+          
+        </div>
+      </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
   }
 }

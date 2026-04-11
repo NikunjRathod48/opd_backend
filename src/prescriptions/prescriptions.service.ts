@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IdGeneratorService } from '../utils/id-generator.service';
 import { CreatePrescriptionDto } from './dto/create-prescription.dto';
 
 @Injectable()
 export class PrescriptionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private idGenerator: IdGeneratorService,
+  ) {}
 
   async create(createPrescriptionDto: CreatePrescriptionDto, userId: number) {
     const { visit_id, doctor_id, notes, items } = createPrescriptionDto;
@@ -84,7 +88,7 @@ export class PrescriptionsService {
     return this.prisma.prescriptions.findMany({
       where: {
         is_active: true,
-        status: 'Pending',
+        status: { in: ['Pending', 'Partially Dispensed'] },
         opd_visits: {
           hospital_id: hospital_id,
         },
@@ -102,7 +106,7 @@ export class PrescriptionsService {
     });
   }
 
-  async dispense(id: number, userId: number) {
+  async dispense(id: number, userId: number, itemIds?: number[]) {
     return this.prisma.$transaction(async (tx) => {
       // Find prescription
       const rx = await tx.prescriptions.findUnique({
@@ -121,8 +125,22 @@ export class PrescriptionsService {
       const hospital_id = rx.opd_visits?.hospital_id;
       if (!hospital_id) throw new BadRequestException('Invalid Visit / Hospital link');
 
+      // Filter to only 'Pending' items, and if itemIds array is passed, only those.
+      const itemsToProcess = rx.prescription_items.filter(item => {
+        // Use generic casting for status to prevent strict TS errors before Prisma client regenerates
+        if ((item as any).status === 'Dispensed') return false; 
+        if (itemIds && itemIds.length > 0) {
+          return itemIds.includes(item.prescription_item_id);
+        }
+        return true; // if no itemIds passed, process all remaining pending
+      });
+
+      if (itemsToProcess.length === 0) {
+         throw new BadRequestException('No pending items selected for dispensing');
+      }
+
       // Deduct stock for each item
-      for (const item of rx.prescription_items) {
+      for (const item of itemsToProcess) {
         const hospMed = await tx.hospital_medicines.findUnique({
           where: {
             hospital_id_medicine_id: {
@@ -140,62 +158,83 @@ export class PrescriptionsService {
             where: { hospital_medicine_id: hospMed.hospital_medicine_id },
             data: { stock_quantity: hospMed.stock_quantity - item.quantity },
           });
+
+          await tx.prescription_items.update({
+            where: { prescription_item_id: item.prescription_item_id },
+            data: { status: 'Dispensed' } as any, // Cast to any to bypass immediate TypeScript error
+          });
         } else {
            throw new BadRequestException(`Medicine ${item.medicines?.medicine_name || item.medicine_id} not found in hospital inventory`);
         }
       }
 
-      // Add to Existing Pending Bill (Option B Workflow)
-      const existingBill = await tx.billing.findFirst({
-        where: {
-          visit_id: rx.visit_id,
-          NOT: { payment_status: 'Paid' },
-        },
-      });
+      // Create an independent Pharmacy Bill
+      const pendingMedicineItems: any[] = [];
+      let medicineSubtotal = 0;
 
-      if (existingBill) {
-        const newBillItems: any[] = [];
-        let additionalPreTaxTotal = 0;
+      for (const item of itemsToProcess) {
+        const med = await tx.medicines.findUnique({ where: { medicine_id: item.medicine_id } });
+        const price = Number(med?.price || 0);
+        const qty = item.quantity || 1;
+        const totalLinePrice = price * qty;
 
-        for (const item of rx.prescription_items) {
-          const med = await tx.medicines.findUnique({ where: { medicine_id: item.medicine_id } });
-          const price = Number(med?.price || 0);
-          const qty = item.quantity || 1;
-          const totalLinePrice = price * qty;
-
-          newBillItems.push({
-            bill_id: existingBill.bill_id,
-            item_type: 'Medicine',
-            reference_id: item.medicine_id,
-            item_description: med?.medicine_name || 'Medicine',
-            quantity: qty,
-            unit_price: price,
-            total_price: totalLinePrice,
-          });
-          additionalPreTaxTotal += totalLinePrice;
-        }
-
-        if (newBillItems.length > 0) {
-          await tx.bill_items.createMany({ data: newBillItems });
-          await tx.billing.update({
-             where: { bill_id: existingBill.bill_id },
-             data: {
-               subtotal_amount: Number(existingBill.subtotal_amount) + additionalPreTaxTotal,
-               modified_by: userId,
-             }
-          });
-        }
+        pendingMedicineItems.push({
+          item_type: 'Medicine',
+          reference_id: item.medicine_id,
+          item_description: med?.medicine_name || 'Medicine',
+          quantity: qty,
+          unit_price: price,
+          total_price: totalLinePrice,
+        });
+        medicineSubtotal += totalLinePrice;
       }
 
-      // Mark Dispensed
-      return tx.prescriptions.update({
+      let generatedBill: any = null;
+      if (pendingMedicineItems.length > 0) {
+        // Generate new standalone bill number inside the transaction using the tx client
+        const newBillNumber = await this.idGenerator.generateBillNumber(hospital_id, userId, tx);
+        
+        generatedBill = await tx.billing.create({
+          data: {
+             hospital_id: hospital_id,
+             visit_id: rx.visit_id,
+             bill_number: newBillNumber,
+             subtotal_amount: medicineSubtotal,
+             tax_amount: 0,
+             discount_amount: 0,
+             payment_status: 'Pending',
+             billing_status: 'Finalized',
+             created_by: userId,
+             modified_by: userId,
+             bill_items: {
+                create: pendingMedicineItems,
+             }
+          }
+        });
+      }
+
+      // Evaluate overall status
+      const processedItemIds = new Set(itemsToProcess.map(i => i.prescription_item_id));
+      const allItemsDispensed = rx.prescription_items.every(item => 
+         (item as any).status === 'Dispensed' || processedItemIds.has(item.prescription_item_id)
+      );
+
+      const newStatus = allItemsDispensed ? 'Dispensed' : 'Partially Dispensed';
+
+      // Mark status
+      await tx.prescriptions.update({
         where: { prescription_id: id },
         data: {
-          status: 'Dispensed',
+          status: newStatus,
           modified_by: userId,
           modified_at: new Date(),
         },
       });
+
+      return {
+        status: newStatus,
+        new_bill_id: generatedBill?.bill_id || null
+      };
     });
   }
 }

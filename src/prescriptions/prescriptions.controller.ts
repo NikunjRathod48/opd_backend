@@ -29,8 +29,12 @@ export class PrescriptionsController {
   }
 
   @Post(':id/dispense')
-  dispense(@Param('id') id: string, @Req() req: any) {
+  dispense(
+    @Param('id') id: string, 
+    @Req() req: any,
+    @Body() body: { itemIds?: number[] }
+  ) {
     const userId = req.user.userId;
-    return this.prescriptionsService.dispense(+id, userId);
+    return this.prescriptionsService.dispense(+id, userId, body.itemIds);
   }
 }

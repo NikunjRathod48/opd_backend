@@ -577,6 +577,7 @@ model prescription_items {
   quantity             Int
   duration_days        Int
   instructions         String?       @db.VarChar(250)
+  status               String        @default("Pending") @db.VarChar(50)
   medicines            medicines     @relation(fields: [medicine_id], references: [medicine_id], onDelete: NoAction, onUpdate: NoAction)
   prescriptions        prescriptions @relation(fields: [prescription_id], references: [prescription_id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -674,6 +675,19 @@ model tests {
   hospital_tests     hospital_tests[]
   opd_tests          opd_tests[]
   departments_master departments_master @relation(fields: [department_id], references: [department_id], onDelete: NoAction, onUpdate: NoAction)
+  test_parameters    test_parameters[]
+}
+
+model test_parameters {
+  parameter_id   Int      @id @default(autoincrement())
+  test_id        Int
+  parameter_name String   @db.VarChar(100)
+  unit           String   @db.VarChar(50)
+  normal_range   String   @db.VarChar(100)
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  
+  tests          tests    @relation(fields: [test_id], references: [test_id], onDelete: Cascade)
 }
 
 model treatment_types {
