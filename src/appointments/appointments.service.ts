@@ -5,6 +5,7 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { IdGeneratorService } from '../utils/id-generator.service';
 import { OpdService } from '../opd/opd.service';
 import { QueuesService } from '../queues/queues.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AppointmentsService {
@@ -14,6 +15,7 @@ export class AppointmentsService {
     @Inject(forwardRef(() => OpdService))
     private opdService: OpdService,
     private queuesService: QueuesService,
+    private mailService: MailService,
   ) { }
 
   async getAvailability(doctorId: number, dateStr: string, patientId?: number) {
@@ -47,7 +49,7 @@ export class AppointmentsService {
           patient_id: resolvedPatientId,
           doctor_id: doctorId,
           appointment_date: date,
-          appointment_status: { notIn: ['Cancelled', 'No-Show'] },
+          appointment_status: { notIn: ['Cancelled', 'No-Show', 'Rescheduled'] },
         },
         select: { appointment_time: true, appointment_status: true },
       });
@@ -87,6 +89,7 @@ export class AppointmentsService {
       where: {
         doctor_id: doctorId,
         appointment_date: date,
+        // Rescheduled appointments still occupy their new slot — only exclude Cancelled & No-Show
         appointment_status: { notIn: ['Cancelled', 'No-Show'] },
       },
       select: { appointment_time: true },
@@ -192,7 +195,7 @@ export class AppointmentsService {
           patient_id: resolvedPatientId,
           doctor_id: createAppointmentDto.doctor_id,
           appointment_date: appointmentDate,
-          appointment_status: { notIn: ['Cancelled', 'No-Show'] },
+          appointment_status: { notIn: ['Cancelled', 'No-Show', 'Rescheduled'] },
         },
       });
 
@@ -205,6 +208,7 @@ export class AppointmentsService {
         where: {
           doctor_id: createAppointmentDto.doctor_id,
           appointment_date: appointmentDate,
+          // Rescheduled appointments still occupy their new slot — only exclude Cancelled & No-Show
           appointment_status: { notIn: ['Cancelled', 'No-Show'] },
         },
         select: { appointment_time: true },
@@ -235,6 +239,43 @@ export class AppointmentsService {
       });
 
       // Queue Generation removed from here. Handled during Check-In.
+
+      // --- Send Appointment Confirmation Email (fire-and-forget) ---
+      const patient = await tx.patients.findUnique({
+        where: { patient_id: resolvedPatientId },
+        include: { users_patients_user_idTousers: { select: { full_name: true, email: true } } },
+      });
+      const doctor = await tx.doctors.findUnique({
+        where: { doctor_id: createAppointmentDto.doctor_id },
+        include: { users_doctors_user_idTousers: { select: { full_name: true } } },
+      });
+      const hospital = await tx.hospitals.findUnique({
+        where: { hospital_id: createAppointmentDto.hospital_id },
+        select: { hospital_name: true },
+      });
+
+      const patientEmail = patient?.users_patients_user_idTousers?.email;
+      if (patientEmail) {
+        // Format date: "Monday, 21 April 2026"
+        const formattedDate = appointmentDate.toLocaleDateString('en-IN', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+        });
+        // Format time: "10:30 AM"
+        const formattedTime = appointmentTime.toLocaleTimeString('en-IN', {
+          hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'UTC',
+        });
+
+        // Await to ensure email is sent before response returns
+        await this.mailService.sendAppointmentConfirmation({
+          patientName: patient?.users_patients_user_idTousers?.full_name || 'Patient',
+          patientEmail,
+          doctorName: doctor?.users_doctors_user_idTousers?.full_name || 'Doctor',
+          hospitalName: hospital?.hospital_name || 'Hospital',
+          appointmentDate: formattedDate,
+          appointmentTime: formattedTime,
+          appointmentNo: appointmentNo,
+        });
+      }
 
       return appointment;
     });
@@ -427,17 +468,177 @@ export class AppointmentsService {
     updateAppointmentDto: UpdateAppointmentDto,
     userId: number,
   ) {
+    // Fetch the old appointment BEFORE updating (to compare date/time)
+    const oldAppointment = await this.prisma.appointments.findUnique({
+      where: { appointment_id: id },
+    });
+
+    // Build data object manually — Prisma needs Date objects, not raw strings
+    const updateData: any = {
+      modified_by: userId,
+      modified_at: new Date(),
+    };
+
+    if (updateAppointmentDto.appointment_status) {
+      updateData.appointment_status = updateAppointmentDto.appointment_status;
+    }
+    if (updateAppointmentDto.remarks !== undefined) {
+      updateData.remarks = updateAppointmentDto.remarks;
+    }
+
+    // Parse date/time strings into proper Date objects (like create() does)
+    if (updateAppointmentDto.appointment_date) {
+      const [year, month, day] = updateAppointmentDto.appointment_date.split('-').map(Number);
+      updateData.appointment_date = new Date(Date.UTC(year, month - 1, day));
+    }
+    if (updateAppointmentDto.appointment_time) {
+      const timeStr = updateAppointmentDto.appointment_time.substring(0, 5);
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      // Use the appointment date for the time field, or fallback to existing
+      const refDate = updateData.appointment_date || oldAppointment?.appointment_date || new Date();
+      const y = refDate.getUTCFullYear();
+      const m = refDate.getUTCMonth();
+      const d = refDate.getUTCDate();
+      updateData.appointment_time = new Date(Date.UTC(y, m, d, hours, minutes, 0));
+    }
+
+    // --- Validate availability & slot capacity when rescheduling ---
+    if (updateAppointmentDto.appointment_date || updateAppointmentDto.appointment_time) {
+      const targetDate = updateData.appointment_date || oldAppointment?.appointment_date;
+      const targetTime = updateData.appointment_time || oldAppointment?.appointment_time;
+      const targetDoctorId = oldAppointment?.doctor_id;
+
+      if (targetDate && targetDoctorId) {
+        const dayOfWeek = targetDate.getUTCDay() + 1; // 1=Sun … 7=Sat
+        const availability = await this.prisma.doctor_availability.findFirst({
+          where: { doctor_id: targetDoctorId, day_of_week: dayOfWeek, is_available: true },
+        });
+
+        if (!availability) {
+          throw new Error('Doctor is not available on the selected date.');
+        }
+
+        // Check slot capacity — exclude the appointment being rescheduled itself
+        if (targetTime) {
+          const timeStr = targetTime.toISOString().split('T')[1].substring(0, 5);
+          const conflicting = await this.prisma.appointments.findMany({
+            where: {
+              doctor_id: targetDoctorId,
+              appointment_date: targetDate,
+              appointment_status: { notIn: ['Cancelled', 'No-Show', 'Rescheduled'] },
+              appointment_id: { not: id }, // exclude self
+            },
+            select: { appointment_time: true },
+          });
+          const bookedCount = conflicting.filter(
+            a => a.appointment_time.toISOString().split('T')[1].substring(0, 5) === timeStr
+          ).length;
+          if (bookedCount >= 1) {
+            throw new Error('This slot is already booked. Please select another time.');
+          }
+        }
+      }
+    }
+
     const appointment = await this.prisma.appointments.update({
       where: { appointment_id: id },
-      data: {
-        ...updateAppointmentDto,
-        modified_by: userId,
-        modified_at: new Date(),
-      },
+      data: updateData,
     });
 
     if (updateAppointmentDto.appointment_status === 'Checked-In') {
       await this.opdService.createFromAppointment(id, userId);
+    }
+
+    // --- Send Reschedule Email if date or time changed ---
+    if (
+      oldAppointment &&
+      (updateAppointmentDto.appointment_date || updateAppointmentDto.appointment_time)
+    ) {
+      const patient = await this.prisma.patients.findUnique({
+        where: { patient_id: appointment.patient_id },
+        include: { users_patients_user_idTousers: { select: { full_name: true, email: true } } },
+      });
+      const doctor = await this.prisma.doctors.findUnique({
+        where: { doctor_id: appointment.doctor_id },
+        include: { users_doctors_user_idTousers: { select: { full_name: true } } },
+      });
+      const hospital = await this.prisma.hospitals.findUnique({
+        where: { hospital_id: appointment.hospital_id },
+        select: { hospital_name: true },
+      });
+
+      const patientEmail = patient?.users_patients_user_idTousers?.email;
+      if (patientEmail) {
+        // Old date/time
+        const oldDate = oldAppointment.appointment_date.toLocaleDateString('en-IN', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+        });
+        const oldTime = oldAppointment.appointment_time.toLocaleTimeString('en-IN', {
+          hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'UTC',
+        });
+
+        // New date/time
+        const newDate = appointment.appointment_date.toLocaleDateString('en-IN', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+        });
+        const newTime = appointment.appointment_time.toLocaleTimeString('en-IN', {
+          hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'UTC',
+        });
+
+        // Await to ensure email is sent before response returns
+        await this.mailService.sendAppointmentRescheduled({
+          patientName: patient?.users_patients_user_idTousers?.full_name || 'Patient',
+          patientEmail,
+          doctorName: doctor?.users_doctors_user_idTousers?.full_name || 'Doctor',
+          hospitalName: hospital?.hospital_name || 'Hospital',
+          appointmentDate: newDate,
+          appointmentTime: newTime,
+          appointmentNo: oldAppointment.appointment_no,
+          oldDate,
+          oldTime,
+        });
+      }
+    }
+
+    // --- Send Cancellation Email if status changed to Cancelled ---
+    if (
+      oldAppointment &&
+      updateAppointmentDto.appointment_status === 'Cancelled' &&
+      oldAppointment.appointment_status !== 'Cancelled'
+    ) {
+      const patient = await this.prisma.patients.findUnique({
+        where: { patient_id: appointment.patient_id },
+        include: { users_patients_user_idTousers: { select: { full_name: true, email: true } } },
+      });
+      const doctor = await this.prisma.doctors.findUnique({
+        where: { doctor_id: appointment.doctor_id },
+        include: { users_doctors_user_idTousers: { select: { full_name: true } } },
+      });
+      const hospital = await this.prisma.hospitals.findUnique({
+        where: { hospital_id: appointment.hospital_id },
+        select: { hospital_name: true },
+      });
+
+      const patientEmail = patient?.users_patients_user_idTousers?.email;
+      if (patientEmail) {
+        const formattedDate = oldAppointment.appointment_date.toLocaleDateString('en-IN', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+        });
+        const formattedTime = oldAppointment.appointment_time.toLocaleTimeString('en-IN', {
+          hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'UTC',
+        });
+
+        // Await to ensure email is sent before response returns
+        await this.mailService.sendAppointmentCancelled({
+          patientName: patient?.users_patients_user_idTousers?.full_name || 'Patient',
+          patientEmail,
+          doctorName: doctor?.users_doctors_user_idTousers?.full_name || 'Doctor',
+          hospitalName: hospital?.hospital_name || 'Hospital',
+          appointmentDate: formattedDate,
+          appointmentTime: formattedTime,
+          appointmentNo: oldAppointment.appointment_no,
+        });
+      }
     }
 
     return appointment;

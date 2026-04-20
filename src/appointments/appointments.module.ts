@@ -5,11 +5,13 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { UtilsModule } from '../utils/utils.module';
 import { OpdModule } from '../opd/opd.module';
 import { QueuesModule } from '../queues/queues.module';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
-  imports: [PrismaModule, UtilsModule, forwardRef(() => OpdModule), QueuesModule],
+  imports: [PrismaModule, UtilsModule, forwardRef(() => OpdModule), QueuesModule, MailModule],
   controllers: [AppointmentsController],
   providers: [AppointmentsService],
   exports: [AppointmentsService], // Export so OPD module can use it if needed
 })
 export class AppointmentsModule {}
+  

@@ -116,9 +116,54 @@ export class QueuesService {
     this.logger.log(`Auto-queue: created=${created}, reopened=${reopened} (${availableSlots.length} doctors available, day=${dayOfWeek})`);
   }
 
+  // ─── Close stale queues from previous days ──────────────────────────────
+  // Handles the case where the service was asleep (e.g. Render free tier)
+  // and missed the 5-min auto-close window for a previous day's queues.
+  async closeStaleQueues() {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayUtcStr = todayStart.toISOString().split('T')[0];
+
+    // Find all Active queues whose queue_date is BEFORE today
+    const staleQueues = await this.prisma.daily_queues.findMany({
+      where: {
+        status: 'Active',
+        queue_date: {
+          lt: new Date(`${todayUtcStr}T00:00:00.000Z`),
+        },
+      },
+    });
+
+    if (staleQueues.length === 0) return;
+
+    this.logger.warn(
+      `🧹 Found ${staleQueues.length} stale Active queue(s) from previous days — closing them now.`,
+    );
+
+    for (const queue of staleQueues) {
+      await this.prisma.daily_queues.update({
+        where: { daily_queue_id: queue.daily_queue_id },
+        data: {
+          status: 'Closed',
+          closed_at: new Date(),
+          modified_by: 1, // system user
+        },
+      });
+      this.eventsGateway.broadcastQueueUpdate(queue.hospital_id, queue.daily_queue_id);
+      this.logger.log(
+        `🧹 Closed stale queue ${queue.daily_queue_id} (doctor ${queue.doctor_id}, date ${queue.queue_date})`,
+      );
+    }
+
+    this.logger.log(`🧹 Closed ${staleQueues.length} stale queue(s) total.`);
+  }
+
   // ─── CRON: Auto-close queues after doctor's end_time ────────────────────
   @Cron('*/5 * * * *') // every 5 minutes
   async autoCloseDailyQueues() {
+    // 0. First, close any stale queues from previous days (missed due to downtime)
+    await this.closeStaleQueues();
+
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const dayOfWeek = now.getDay() + 1; // 1=Sun ... 7=Sat
@@ -689,9 +734,10 @@ export class QueuesService {
     });
   }
 
-  // ─── On Application Bootstrap: ensure today's queues exist ───────────────
+  // ─── On Application Bootstrap: cleanup stale + ensure today's queues ────
   async onModuleInit() {
-    this.logger.log('🚀 QueuesService init — ensuring daily queues exist...');
-    await this.autoCreateDailyQueues();
+    this.logger.log('🚀 QueuesService init — cleaning up stale queues & ensuring daily queues exist...');
+    await this.closeStaleQueues();       // close any leftover queues from previous days
+    await this.autoCreateDailyQueues();  // create/reopen today's queues
   }
 }
