@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import * as dns from 'dns';
 
 export interface AppointmentEmailData {
   patientName: string;
@@ -35,6 +36,10 @@ export class MailService {
           user: smtpEmail,
           pass: smtpPassword,
         },
+        tls:{
+          rejectUnauthorized:false
+        },
+        family : 4
       }),
       smtpEmail,
     };
