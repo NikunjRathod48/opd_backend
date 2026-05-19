@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import * as dns from 'dns';
 
+dns.setDefaultResultOrder('ipv4first');
+
 export interface AppointmentEmailData {
   patientName: string;
   patientEmail: string;
@@ -38,8 +40,7 @@ export class MailService {
         },
         tls:{
           rejectUnauthorized:false
-        },
-        family : 4
+        }
       }),
       smtpEmail,
     };
