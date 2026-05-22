@@ -732,14 +732,22 @@ export class AuthService {
       throw new Error('SMTP_EMAIL and SMTP_PASSWORD environment variables are required.');
     }
 
+    const host = this.configService.get<string>('SMTP_HOST') || 'smtp.gmail.com';
+    const port = Number(this.configService.get<number | string>('SMTP_PORT')) || 587;
+    const secureVal = this.configService.get<string | boolean>('SMTP_SECURE');
+    const secure = secureVal === 'true' || secureVal === true;
+
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false,
+      host,
+      port,
+      secure,
       auth: {
         user: smtpEmail,
         pass: smtpPassword,
       },
+      tls: {
+        rejectUnauthorized: false
+      }
     });
 
     const mailOptions = {
