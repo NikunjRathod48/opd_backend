@@ -34,6 +34,8 @@ export class MailService {
     const secureVal = this.configService.get<string | boolean>('SMTP_SECURE');
     const secure = secureVal === 'true' || secureVal === true;
 
+    const senderEmail = this.configService.get<string>('SENDER_EMAIL') || smtpEmail;
+
     return {
       transporter: nodemailer.createTransport({
         host,
@@ -47,7 +49,7 @@ export class MailService {
           rejectUnauthorized: false
         }
       }),
-      smtpEmail,
+      smtpEmail: senderEmail,
     };
   }
 

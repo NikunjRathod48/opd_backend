@@ -750,8 +750,10 @@ export class AuthService {
       }
     });
 
+    const senderEmail = this.configService.get<string>('SENDER_EMAIL') || smtpEmail;
+
     const mailOptions = {
-      from: `"MedCore" <${smtpEmail}>`,
+      from: `"MedCore" <${senderEmail}>`,
       to: email,
       subject: 'Password Reset OTP - MedCore',
       html: `
